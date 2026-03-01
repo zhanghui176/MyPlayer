@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="fragment_yuv420p.glsl">D:/QT/demo/MyPlayer/fragment_yuv420p.glsl</file>
+    <file alias="vertex.glsl">D:/QT/demo/MyPlayer/vertex.glsl</file>
+  </qresource>
+</RCC>
+

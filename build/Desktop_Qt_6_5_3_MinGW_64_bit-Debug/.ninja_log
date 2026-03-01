@@ -1,0 +1,24 @@
+# ninja log v6
+4	1494	7939067569846617	MyPlayer_autogen/timestamp	260992d8ab4093d9
+4	1494	7939067569846617	MyPlayer_autogen/mocs_compilation.cpp	260992d8ab4093d9
+4	1494	7939067569846617	D:/QT/demo/MyPlayer/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/MyPlayer_autogen/timestamp	260992d8ab4093d9
+4	1494	7939067569846617	D:/QT/demo/MyPlayer/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/MyPlayer_autogen/mocs_compilation.cpp	260992d8ab4093d9
+1500	1533	7939067570751561	.rcc/qrc_resources.cpp	cfc1233f0cdcdd56
+1500	1533	7939067570751561	D:/QT/demo/MyPlayer/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/.rcc/qrc_resources.cpp	cfc1233f0cdcdd56
+1639	3131	7939067571865452	CMakeFiles/MyPlayer.dir/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/.rcc/qrc_resources.cpp.obj	9ac84be311797795
+1564	5134	7939067571065721	CMakeFiles/MyPlayer.dir/CodecWrapper.cpp.obj	ceb841b84f363e6f
+1620	5358	7939067571665517	CMakeFiles/MyPlayer.dir/FrameFilter.cpp.obj	e0c09b05c56637d
+1557	5754	7939067570965763	CMakeFiles/MyPlayer.dir/AVDemuxer.cpp.obj	62070069b2215720
+1583	5868	7939067571265654	CMakeFiles/MyPlayer.dir/AudioPlayer.cpp.obj	3a178dedf7b29bc5
+1550	6691	7939067570965763	CMakeFiles/MyPlayer.dir/AVPlayer.cpp.obj	10be761b585bf285
+1573	8298	7939067571165685	CMakeFiles/MyPlayer.dir/OpenGLVideoWidget.cpp.obj	3a5be18f746b2e1d
+1538	8450	7939067570865776	CMakeFiles/MyPlayer.dir/main.cpp.obj	c4c6296250b873f2
+1533	8554	7939067570821447	CMakeFiles/MyPlayer.dir/MyPlayer_autogen/mocs_compilation.cpp.obj	c024db38deaab24a
+1543	8882	7939067570865776	CMakeFiles/MyPlayer.dir/mainwindow.cpp.obj	97aa52ee3c32c9fa
+8	152	7939080695771027	MyPlayer_autogen/timestamp	260992d8ab4093d9
+8	152	7939080695771027	MyPlayer_autogen/mocs_compilation.cpp	260992d8ab4093d9
+8	152	7939080695771027	D:/QT/demo/MyPlayer/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/MyPlayer_autogen/timestamp	260992d8ab4093d9
+8	152	7939080695771027	D:/QT/demo/MyPlayer/build/Desktop_Qt_6_5_3_MinGW_64_bit-Debug/MyPlayer_autogen/mocs_compilation.cpp	260992d8ab4093d9
+152	3368	7939080697222596	CMakeFiles/MyPlayer.dir/mainwindow.cpp.obj	97aa52ee3c32c9fa
+9	2815	7939080857466591	CMakeFiles/MyPlayer.dir/MyPlayer_autogen/mocs_compilation.cpp.obj	c024db38deaab24a
+2815	3404	7939080885528845	MyPlayer.exe	7d1eb69476175929
