@@ -55,9 +55,6 @@ void AudioPlayer::init()
         );
     swr_init(swr_ctx_);
 
-    bytesPerSecond_ = audioCodecContext_->sample_rate * audioCodecContext_->ch_layout.nb_channels *
-                      av_get_bytes_per_sample(audioCodecContext_->sample_fmt);
-
     format_.setSampleRate(44100);
     format_.setChannelCount(2);
     format_.setSampleFormat(QAudioFormat::Int16); // 16位采样格式
@@ -70,6 +67,8 @@ void AudioPlayer::init()
         qDebug() << "format is invalid";
         format_ = outputDevice.preferredFormat();
     }
+
+    bytesPerSecond_ = format_.sampleRate() * format_.channelCount() * qMax(1, format_.bytesPerSample());
 
     // 创建音频输出 (Qt6 使用 QAudioSink)
     audioSink_ = new QAudioSink(outputDevice, format_);
@@ -89,6 +88,24 @@ void AudioPlayer::init()
     qDebug() << "audio initialize finished.";
 }
 
+double AudioPlayer::getBufferedSecUnsafe()
+{
+    // calcute how many bytes still in device and not play yet.
+    if (!audioSink_ || bytesPerSecond_ <= 0)
+    {
+        return 0.0;
+    }
+    int freeBytes = 0;
+    int bufferSize = 0;
+    {
+        std::lock_guard<std::mutex> audioLk(audioDeviceMtx_);
+        freeBytes = audioSink_->bytesFree();
+        bufferSize = audioSink_->bufferSize();
+    }
+    const int usedBytes = qMax(0, bufferSize - freeBytes);
+    return static_cast<double>(usedBytes) / static_cast<double>(bytesPerSecond_);
+}
+
 double AudioPlayer::getAudioTime()
 {
     std::lock_guard<std::mutex> locker(audioClockMutex_);
@@ -96,8 +113,35 @@ double AudioPlayer::getAudioTime()
     {
         return 0.0;
     }
+    // the duration which was sent into audio thread
     double processdSec = static_cast<double>(audioSink_->processedUSecs())/1000000.0;
-    return audioClockBasePtsSce_ - processdSec;
+    const double bufferedSec = getBufferedSecUnsafe();
+    return audioClockBasePtsSce_ + processdSec - bufferedSec;
+}
+
+void AudioPlayer::resetForSeek()
+{
+    {
+        std::lock_guard<std::mutex> locker(audioClockMutex_);
+        audioClockBasePtsSce_ = 0.0;
+        audioClockValid = false;
+    }
+
+    std::lock_guard<std::mutex> audioLk(audioDeviceMtx_);
+    if (!audioSink_)
+    {
+        audioDevice_ = nullptr;
+        return;
+    }
+
+    if (swr_ctx_)
+    {
+        swr_close(swr_ctx_);
+        swr_init(swr_ctx_);
+    }
+
+    audioSink_->stop();
+    audioDevice_ = audioSink_->start();
 }
 
 bool AudioPlayer::isAudioClockValid()
@@ -129,7 +173,8 @@ void AudioPlayer::playAudio(AVFrame* frame)
         if (!audioClockValid && audioSink_)
         {
             double processdSec = static_cast<double>(audioSink_->processedUSecs())/1000000.0;
-            audioClockBasePtsSce_ = framePtsSec - processdSec;
+            const double bufferedSec = getBufferedSecUnsafe();
+            audioClockBasePtsSce_ = framePtsSec - processdSec + bufferedSec;
             audioClockValid = true;
         }
     }
@@ -182,7 +227,7 @@ void AudioPlayer::playAudio(AVFrame* frame)
         // 避免缓冲超过 200ms 堆积 → 等待一小会儿
         if (msBuffered > 200) {
             int dynamicWait = qMin(msBuffered - 200, 50); // 最多等 50ms
-            qDebug() << "dynamicWait for " << dynamicWait;
+            // qDebug() << "dynamicWait for " << dynamicWait;
             QThread::msleep(dynamicWait);
             free_bytes = audioSink_->bytesFree();
         }

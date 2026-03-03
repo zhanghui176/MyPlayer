@@ -45,7 +45,7 @@ public:
             if (time < frameTimer + delay) {
                 double remaining_time = qMin(frameTimer + delay - time, refreshRate);
                 locker.unlock();
-                qDebug() << "wait for " << remaining_time * 1000000.0 << " us";
+                // qDebug() << "wait for " << remaining_time * 1000000.0 << " us";
                 av_usleep((int64_t)(remaining_time * 1000000.0));
                 return false;
             }

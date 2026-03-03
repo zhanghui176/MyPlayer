@@ -37,7 +37,10 @@ private:
     Ui::MainWindow *ui;
     AVPlayer player_;
     QTimer progressTimer_;
-    double duration_;
+    double duration_ = 0.0;
     bool sliderDragging_ = false;
+    bool seekInProgress_ = false;
+    double seekTargetSec_ = 0.0;
+    qint64 seekHoldUntilMs_ = 0;
 };
 #endif // MAINWINDOW_H

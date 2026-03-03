@@ -47,10 +47,26 @@ void MainWindow::onProgressUpdate()
         return;
     }
 
+    // 防抖
+    if (seekInProgress_)
+    {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (nowMs < seekHoldUntilMs_)
+        {
+            const double targetRatio = qBound(0.0, seekTargetSec_/duration_, 1.0);
+            const int targetValue = static_cast<int>(targetRatio * ui->progressSlider->maximum());
+            QSignalBlocker blocker(ui->progressSlider);
+            ui->progressSlider->setValue(targetValue);
+            return;
+        }
+        seekInProgress_ = false;
+    }
+
     const double currentTime = player_.getCurrentTimeSec();
     const double ratio = qBound(0.0, currentTime/duration_, 1.0);
     const int value = static_cast<int> (ratio * ui->progressSlider->maximum());
 
+    qDebug() << "currentTime is " << currentTime << ", value is " << value;
     QSignalBlocker blocker(ui->progressSlider);
     ui->progressSlider->setValue(value);
 }
@@ -76,6 +92,9 @@ void MainWindow::on_progressSlider_sliderReleased()
 
     const double pos = static_cast<double>(ui->progressSlider->value()) / static_cast<double>(maxValue);
     player_.doSeek(pos);
+    seekTargetSec_ = pos * duration_;
+    seekHoldUntilMs_ = QDateTime::currentMSecsSinceEpoch() + 600;
+    seekInProgress_ = true;
     qDebug() << "doSeek to pos : " << pos;
     sliderDragging_ = false;
 }

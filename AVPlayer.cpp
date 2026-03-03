@@ -39,17 +39,22 @@ void AVPlayer::setUrl(std::string url)
 
 double AVPlayer::getCurrentTimeSec()
 {
+    const double videoSec = currentVideoPtsSec_.load();
     if (audioPlayer_ && audioPlayer_->isAudioClockValid())
     {
         const double audioSec = audioPlayer_->getAudioTime();
         if (audioSec >= 0.0)
         {
+            constexpr double kMaxClockGapSec = 3.0;
+            if (videoSec > 0.0 && std::fabs(audioSec - videoSec) > kMaxClockGapSec)
+            {
+                return videoSec;
+            }
             return audioSec;
         }
     }
-    return currentVideoPtsSec_.load();
+    return videoSec;
 }
-
 double AVPlayer::getDurationSec()
 {
     AVFormatContext* fmtCtx = demuxer_ ? demuxer_->getFormatCtx() : nullptr;
@@ -152,10 +157,13 @@ void AVPlayer::doSeek(double pos)
     videoFrameQueue_.clear();
     audioFrameQueue_.clear();
     subtitleFrameQueue_.clear();
+    if (audioPlayer_)
+    {
+        audioPlayer_->resetForSeek();
+    }
 
     syncTimer_.clear();
     audioStart_ = false;
-    currentVideoPtsSec_.store(pos * getDurationSec());
     isSeek_ = false;
     seekCv_.notify_all();
 }

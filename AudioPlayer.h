@@ -26,8 +26,12 @@ public:
     int createAudioDevice();
     double getAudioTime();
     bool isAudioClockValid();
+    void resetForSeek();
 signals:
     void AudioFrameReady(AVFrame* frame);
+
+private:
+    double getBufferedSecUnsafe();
 
 private:
     std::shared_ptr<CodecWrapper> audioCodecWrapper_;
