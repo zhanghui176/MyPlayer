@@ -22,7 +22,7 @@ public:
     AudioPlayer(std::shared_ptr<CodecWrapper> codecWrapper);
     ~AudioPlayer();
     void init();
-    void playAudio(AVFrame* frame);
+    bool playAudio(AVFrame* frame);
     int createAudioDevice();
     double getAudioTime();
     bool isAudioClockValid();

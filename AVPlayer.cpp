@@ -142,6 +142,14 @@ void AVPlayer::doSeek(double pos)
     }
 
     demuxer_->clearEofFlag();
+
+    videoPacketQueue_.setActive(false);
+    audioPacketQueue_.setActive(false);
+    subtitlePacketQueue_.setActive(false);
+    videoFrameQueue_.setActive(false);
+    audioFrameQueue_.setActive(false);
+    subtitleFrameQueue_.setActive(false);
+
     for (auto &streamEntry : currentStreams_)
     {
         auto &codecWrapper = streamEntry.second;
@@ -157,6 +165,14 @@ void AVPlayer::doSeek(double pos)
     videoFrameQueue_.clear();
     audioFrameQueue_.clear();
     subtitleFrameQueue_.clear();
+
+    videoPacketQueue_.setActive(true);
+    audioPacketQueue_.setActive(true);
+    subtitlePacketQueue_.setActive(true);
+    videoFrameQueue_.setActive(true);
+    audioFrameQueue_.setActive(true);
+    subtitleFrameQueue_.setActive(true);
+
     if (audioPlayer_)
     {
         audioPlayer_->resetForSeek();
@@ -331,8 +347,19 @@ void AVPlayer::doPlayAudio()
         }
         if (audioPlayer_)
         {
-            audioPlayer_->playAudio(frame.value().get());
-            audioStart_ = true;
+            bool played = false;
+            {
+                std::lock_guard<std::mutex> seekLock(seekMutex_);
+                if (isSeek_)
+                {
+                    continue;
+                }
+                played = audioPlayer_->playAudio(frame.value().get());
+            }
+            if (played)
+            {
+                audioStart_ = true;
+            }
         }
     }
 }
@@ -475,6 +502,10 @@ void AVPlayer::doPlayVideo()
             currentVideoPtsSec_.store(videoPtsSec);
             for (;;)
             {
+                if (isSeek_ || quit_)
+                {
+                    break;
+                }
                 const double audioTimeSec = audioPlayer_->getAudioTime();
                 const bool ready = syncTimer_.wait(true, videoPtsSec, 1, audioTimeSec);
                 if (ready) {
@@ -485,6 +516,12 @@ void AVPlayer::doPlayVideo()
                     return;
                 }
             }
+
+            if (isSeek_ || quit_)
+            {
+                continue;
+            }
+
             emit videoframeReady(av_frame_clone(frame.value().get()));
         }
     }

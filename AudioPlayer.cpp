@@ -141,6 +141,7 @@ void AudioPlayer::resetForSeek()
     }
 
     audioSink_->stop();
+    audioSink_->reset();
     audioDevice_ = audioSink_->start();
 }
 
@@ -149,8 +150,13 @@ bool AudioPlayer::isAudioClockValid()
     std::lock_guard<std::mutex> locker(audioClockMutex_);
     return audioClockValid && audioSink_;
 }
-void AudioPlayer::playAudio(AVFrame* frame)
+bool AudioPlayer::playAudio(AVFrame* frame)
 {
+    if (!frame || !audioSink_ || !audioDevice_ || !swr_ctx_)
+    {
+        return false;
+    }
+
     int64_t pts = frame->best_effort_timestamp;
     if (pts == AV_NOPTS_VALUE) {
         pts = frame->pts;
@@ -168,21 +174,11 @@ void AudioPlayer::playAudio(AVFrame* frame)
         std::lock_guard<std::mutex> locker(timeStampMutex_);
         audioTimeStamp_ = framePtsSec;
     }
-    {
-        std::lock_guard<std::mutex> locker(audioClockMutex_);
-        if (!audioClockValid && audioSink_)
-        {
-            double processdSec = static_cast<double>(audioSink_->processedUSecs())/1000000.0;
-            const double bufferedSec = getBufferedSecUnsafe();
-            audioClockBasePtsSce_ = framePtsSec - processdSec + bufferedSec;
-            audioClockValid = true;
-        }
-    }
 
     int out_samples = swr_get_out_samples(swr_ctx_, frame->nb_samples);
     if (out_samples <= 0) {
         qDebug() << "out_samples error";
-        return;
+        return false;
     }
 
     // 分配输出缓冲区
@@ -193,8 +189,10 @@ void AudioPlayer::playAudio(AVFrame* frame)
                                        AV_SAMPLE_FMT_S16, 0);
     if (buffer_size < 0) {
         qDebug()  << "buffer_size error";
-        return;
+        return false;
     }
+
+    bool wroteToDevice = false;
 
     int samples_converted = swr_convert(
         swr_ctx_,
@@ -243,8 +241,28 @@ void AudioPlayer::playAudio(AVFrame* frame)
                     );
             }
             qDebug() << "audio in:" << bytesWritten << "/" << data_size;
+
+            if (bytesWritten > 0)
+            {
+                wroteToDevice = true;
+                std::lock_guard<std::mutex> locker(audioClockMutex_);
+                if (!audioClockValid && audioSink_)
+                {
+                    const double processdSec = static_cast<double>(audioSink_->processedUSecs())/1000000.0;
+                    const double bufferedSec = getBufferedSecUnsafe();
+                    audioClockBasePtsSce_ = framePtsSec - processdSec + bufferedSec;
+                    audioClockValid = true;
+                }
+            }
         } else {
             qDebug() << "drop audio frame";
         }
     }
+
+    if (output_buffer)
+    {
+        av_freep(&output_buffer);
+    }
+
+    return wroteToDevice;
 }

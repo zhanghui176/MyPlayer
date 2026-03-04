@@ -56,7 +56,7 @@ private:
     AVQueue<AVFramePtr> audioFrameQueue_;
     AVQueue<AVFramePtr> subtitleFrameQueue_;
     std::unique_ptr<AudioPlayer> audioPlayer_;
-    bool audioStart_ = false;
+    std::atomic<bool> audioStart_ = false;
     double audioTimestamp_ = 0;
     std::map<int, std::shared_ptr<CodecWrapper>> currentStreams_;
     SyncTimer syncTimer_;
