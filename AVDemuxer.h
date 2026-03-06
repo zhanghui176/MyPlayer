@@ -62,6 +62,7 @@ public:
     AVFormatContext* getFormatCtx();
     AVPacketPtr readPacket();
     AVFramePtr decodePacket(int streamIndex, AVPacketPtr packet);
+    void flushCodecBuffers(const std::map<int, std::shared_ptr<CodecWrapper>>& streams);
     void clearEofFlag();
 
 private:

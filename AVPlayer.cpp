@@ -150,14 +150,7 @@ void AVPlayer::doSeek(double pos)
     audioFrameQueue_.setActive(false);
     subtitleFrameQueue_.setActive(false);
 
-    for (auto &streamEntry : currentStreams_)
-    {
-        auto &codecWrapper = streamEntry.second;
-        if (codecWrapper && codecWrapper->getAvctx())
-        {
-            avcodec_flush_buffers(codecWrapper->getAvctx());
-        }
-    }
+    demuxer_->flushCodecBuffers(currentStreams_);
 
     videoPacketQueue_.clear();
     audioPacketQueue_.clear();

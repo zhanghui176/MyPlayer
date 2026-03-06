@@ -182,8 +182,28 @@ AVPacketPtr AVDemuxer::readPacket()
 AVFramePtr AVDemuxer::decodePacket(int streamIndex, AVPacketPtr packet)
 {
     std::lock_guard<std::mutex> locker(mutex_);
+
+    const auto streamIt = availableStream_.find(streamIndex);
+    if (streamIt == availableStream_.end() || !streamIt->second)
+    {
+        qWarning() << "decodePacket invalid stream index:" << streamIndex;
+        return nullptr;
+    }
+
+    AVCodecContext* ctx = streamIt->second->getAvctx();
+    if (!ctx)
+    {
+        qWarning() << "decodePacket invalid codec context, stream index:" << streamIndex;
+        return nullptr;
+    }
+
     AVFramePtr frame(av_frame_alloc());
-    AVCodecContext* ctx = availableStream_[streamIndex]->getAvctx();
+    if (!frame)
+    {
+        qWarning() << "av_frame_alloc failed in decodePacket";
+        return nullptr;
+    }
+
     int ret = avcodec_send_packet(ctx, packet ? packet.get() : nullptr);
 
     if (ret == AVERROR(EAGAIN))
@@ -211,4 +231,25 @@ AVFramePtr AVDemuxer::decodePacket(int streamIndex, AVPacketPtr packet)
     }
     qWarning() << "decodePacket failed" << ret;
     return nullptr;
+}
+
+void AVDemuxer::flushCodecBuffers(const std::map<int, std::shared_ptr<CodecWrapper>>& streams)
+{
+    std::lock_guard<std::mutex> locker(mutex_);
+    for (const auto& streamEntry : streams)
+    {
+        const auto& codecWrapper = streamEntry.second;
+        if (!codecWrapper)
+        {
+            continue;
+        }
+
+        AVCodecContext* ctx = codecWrapper->getAvctx();
+        if (!ctx)
+        {
+            continue;
+        }
+
+        avcodec_flush_buffers(ctx);
+    }
 }
