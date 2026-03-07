@@ -169,7 +169,7 @@ bool AudioPlayer::playAudio(AVFrame* frame)
     }
 
     const double framePtsSec = pts * av_q2d(audioStream_->time_base);
-    qDebug() << "playAudio running, sample is " << frame->nb_samples << ", pts is " << framePtsSec;
+    qDebug() << "[PLAY]playAudio running, sample is " << frame->nb_samples << ", pts is " << framePtsSec;
     {
         std::lock_guard<std::mutex> locker(timeStampMutex_);
         audioTimeStamp_ = framePtsSec;

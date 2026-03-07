@@ -2,6 +2,20 @@
 #include <QDebug>
 #include <cmath>
 
+namespace {
+
+inline bool isSeekStale(uint64_t itemSerial, uint64_t currentSerial, bool isSeeking)
+{
+    return isSeeking || itemSerial != currentSerial;
+}
+
+inline bool shouldAbortForSeekOrQuit(uint64_t itemSerial, uint64_t currentSerial, bool isSeeking, bool isQuitting)
+{
+    return isQuitting || isSeekStale(itemSerial, currentSerial, isSeeking);
+}
+
+}  // namespace
+
 AVPlayer::AVPlayer()
     : demuxer_(std::make_shared<AVDemuxer>())
     , videoFilter_(nullptr)
@@ -141,6 +155,9 @@ void AVPlayer::doSeek(double pos)
         qDebug() << "Seek successful";
     }
 
+    // Mark all in-flight packets/frames from previous timeline as stale.
+    seekSerial_.fetch_add(1);
+
     demuxer_->clearEofFlag();
 
     videoPacketQueue_.setActive(false);
@@ -203,10 +220,17 @@ void AVPlayer::doDemux()
             return;
         }
 
+        const uint64_t packetSerial = seekSerial_.load();
+
         AVPacketPtr pkt;
         {
             std::lock_guard<std::mutex> lock(seekMutex_);
             pkt = demuxer_->readPacket();
+        }
+
+        if (isSeekStale(packetSerial, seekSerial_.load(), isSeek_))
+        {
+            continue;
         }
 
         if (pkt == nullptr)
@@ -215,15 +239,15 @@ void AVPlayer::doDemux()
             {
                 if (videoIt != currentStreams_.end())
                 {
-                    videoPacketQueue_.enqueue(AVPacketPtr());
+                    videoPacketQueue_.enqueue(QueuedPacket::makeEof(packetSerial));
                 }
                 if (audioIt != currentStreams_.end())
                 {
-                    audioPacketQueue_.enqueue(AVPacketPtr());
+                    audioPacketQueue_.enqueue(QueuedPacket::makeEof(packetSerial));
                 }
                 if (subtitleIt != currentStreams_.end())
                 {
-                    subtitlePacketQueue_.enqueue(AVPacketPtr());
+                    subtitlePacketQueue_.enqueue(QueuedPacket::makeEof(packetSerial));
                 }
                 qDebug() << "return here";
             }
@@ -234,17 +258,19 @@ void AVPlayer::doDemux()
             return;
         }
 
-        if (videoIt != currentStreams_.end() && pkt->stream_index == videoIt->second->getStream()->index)
+        const int pktStreamIndex = pkt->stream_index;
+
+        if (videoIt != currentStreams_.end() && pktStreamIndex == videoIt->second->getStream()->index)
         {
-            videoPacketQueue_.enqueue(std::move(pkt));
+            videoPacketQueue_.enqueue(QueuedPacket(std::move(pkt), packetSerial));
         }
-        else if (audioIt != currentStreams_.end() && pkt->stream_index == audioIt->second->getStream()->index)
+        else if (audioIt != currentStreams_.end() && pktStreamIndex == audioIt->second->getStream()->index)
         {
-            audioPacketQueue_.enqueue(std::move(pkt));
+            audioPacketQueue_.enqueue(QueuedPacket(std::move(pkt), packetSerial));
         }
-        else if (subtitleIt != currentStreams_.end() && pkt->stream_index == subtitleIt->second->getStream()->index)
+        else if (subtitleIt != currentStreams_.end() && pktStreamIndex == subtitleIt->second->getStream()->index)
         {
-            subtitlePacketQueue_.enqueue(std::move(pkt));
+            subtitlePacketQueue_.enqueue(QueuedPacket(std::move(pkt), packetSerial));
         }
     }
 }
@@ -266,20 +292,22 @@ void AVPlayer::doAudioDecode()
             return;
         }
 
-        auto pkt = audioPacketQueue_.dequeue();
-        if (!pkt)
+        auto queuedPktOpt = audioPacketQueue_.dequeue();
+        if (!queuedPktOpt)
         {
             if (quit_)
                 return;
             continue;
         }
 
-        if (isSeek_)
+        QueuedPacket queuedPkt = std::move(queuedPktOpt.value());
+
+        if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
 
-        if (!pkt.value())
+        if (queuedPkt.eof)
         {
             qDebug() << "Flushing audio decoder";
             for (;;)
@@ -289,15 +317,23 @@ void AVPlayer::doAudioDecode()
                 {
                     break;  // flush finished, exist
                 }
-                audioFrameQueue_.enqueue(std::move(frame));
+                if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
+                {
+                    continue;
+                }
+                audioFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
             }
-            audioFrameQueue_.enqueue(AVFramePtr());  // send EOF signal
+            if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
+            {
+                continue;
+            }
+            audioFrameQueue_.enqueue(QueuedFrame::makeEof(queuedPkt.seekSerial));  // send EOF signal
             qDebug() << "Audio flush complete, exiting";
             return;  // exist after flushing
         }
 
-        auto frame = demuxer_->decodePacket(audioStreamIndex, std::move(pkt.value()));
-        if (isSeek_)
+        auto frame = demuxer_->decodePacket(audioStreamIndex, std::move(queuedPkt.packet));
+        if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
@@ -307,8 +343,8 @@ void AVPlayer::doAudioDecode()
             qDebug() << "audio frame incorrect";
             continue;
         }
-        qDebug() << "decode successfully, audioPacketQueue size = " << audioPacketQueue_.size();
-        audioFrameQueue_.enqueue(std::move(frame));
+        audioFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
+        qDebug() << "[PLAY]decode successfully, audioFrameQueue_ size = " << audioFrameQueue_.size();
     }
 }
 
@@ -323,18 +359,20 @@ void AVPlayer::doPlayAudio()
             return;
         }
 
-        auto frame = audioFrameQueue_.dequeue();
-        if (!frame) {
+        auto queuedFrameOpt = audioFrameQueue_.dequeue();
+        if (!queuedFrameOpt) {
             if (quit_) return;
             continue;
         }
 
-        if (isSeek_)
+        QueuedFrame queuedFrame = std::move(queuedFrameOpt.value());
+
+        if (isSeekStale(queuedFrame.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
 
-        if (!frame.value()) {
+        if (queuedFrame.eof) {
             qDebug() << "Audio playback finished (EOF)";
             return;
         }
@@ -343,11 +381,11 @@ void AVPlayer::doPlayAudio()
             bool played = false;
             {
                 std::lock_guard<std::mutex> seekLock(seekMutex_);
-                if (isSeek_)
+                if (isSeekStale(queuedFrame.seekSerial, seekSerial_.load(), isSeek_))
                 {
                     continue;
                 }
-                played = audioPlayer_->playAudio(frame.value().get());
+                played = audioPlayer_->playAudio(queuedFrame.frame.get());
             }
             if (played)
             {
@@ -374,19 +412,21 @@ void AVPlayer::doVideoDecode()
             return;
         }
 
-        auto pkt = videoPacketQueue_.dequeue();
-        if (!pkt)
+        auto queuedPktOpt = videoPacketQueue_.dequeue();
+        if (!queuedPktOpt)
         {
             if (quit_) return;
             continue;
         }
 
-        if (isSeek_)
+        QueuedPacket queuedPkt = std::move(queuedPktOpt.value());
+
+        if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
 
-        if (!pkt.value())
+        if (queuedPkt.eof)
         {
             qDebug() << "Flushing video decoder";
             for (;;)
@@ -396,15 +436,23 @@ void AVPlayer::doVideoDecode()
                 {
                     break;
                 }
-                videoFrameQueue_.enqueue(std::move(frame));
+                if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
+                {
+                    continue;
+                }
+                videoFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
             }
-            videoFrameQueue_.enqueue(AVFramePtr());  // send EOF signal
+            if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
+            {
+                continue;
+            }
+            videoFrameQueue_.enqueue(QueuedFrame::makeEof(queuedPkt.seekSerial));  // send EOF signal
             qDebug() << "Video flush complete, exiting";
             return;
         }
 
-        auto frame = demuxer_->decodePacket(videoStreamIndex, std::move(pkt.value()));
-        if (isSeek_)
+        auto frame = demuxer_->decodePacket(videoStreamIndex, std::move(queuedPkt.packet));
+        if (isSeekStale(queuedPkt.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
@@ -419,8 +467,8 @@ void AVPlayer::doVideoDecode()
             auto filteredFrame = videoFilter_->doFilt(std::move(frame));
             if (filteredFrame)
             {
-                videoFrameQueue_.enqueue(std::move(filteredFrame));
-                qDebug() << "enqueue video frame after doFilt";
+                videoFrameQueue_.enqueue(QueuedFrame(std::move(filteredFrame), queuedPkt.seekSerial));
+                qDebug() << "[PLAY]enqueue video frame after doFilt, queue size is " << videoFrameQueue_.size();
             }
             else
             {
@@ -429,7 +477,7 @@ void AVPlayer::doVideoDecode()
         }
         else
         {
-            videoFrameQueue_.enqueue(std::move(frame));
+            videoFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
             qDebug() << "enqueue video frame without doFilt";
         }
     }
@@ -462,28 +510,30 @@ void AVPlayer::doPlayVideo()
             continue;
         }
 
-        auto frame = videoFrameQueue_.dequeue();
-        if (!frame) {
+        auto queuedFrameOpt = videoFrameQueue_.dequeue();
+        if (!queuedFrameOpt) {
             if (quit_) return;
             continue;
         }
 
-        if (isSeek_)
+        QueuedFrame queuedFrame = std::move(queuedFrameOpt.value());
+
+        if (isSeekStale(queuedFrame.seekSerial, seekSerial_.load(), isSeek_))
         {
             continue;
         }
 
-        if (!frame.value()) {
+        if (queuedFrame.eof) {
             qDebug() << "Video playback finished (EOF)";
             return;
         }
-        qDebug() << "frame enqueue height: " << frame.value().get()->height  << ",width is "
-                 << frame.value().get()->width << ",audioStart_ is " << audioStart_;
+        qDebug() << "frame enqueue height: " << queuedFrame.frame.get()->height  << ",width is "
+                 << queuedFrame.frame.get()->width << ",audioStart_ is " << audioStart_;
         if (audioPlayer_ && audioStart_)
         {
-            int64_t pts = frame.value().get()->best_effort_timestamp;
+            int64_t pts = queuedFrame.frame.get()->best_effort_timestamp;
             if (pts == AV_NOPTS_VALUE) {
-                pts = frame.value().get()->pts;
+                pts = queuedFrame.frame.get()->pts;
             }
             if (pts == AV_NOPTS_VALUE) {
                 pts = 0;
@@ -495,14 +545,14 @@ void AVPlayer::doPlayVideo()
             currentVideoPtsSec_.store(videoPtsSec);
             for (;;)
             {
-                if (isSeek_ || quit_)
+                if (shouldAbortForSeekOrQuit(queuedFrame.seekSerial, seekSerial_.load(), isSeek_, quit_))
                 {
                     break;
                 }
                 const double audioTimeSec = audioPlayer_->getAudioTime();
                 const bool ready = syncTimer_.wait(true, videoPtsSec, 1, audioTimeSec);
                 if (ready) {
-                    qDebug() << "Sync result is " << ready << ", video time stamp is " << videoPtsSec;
+                    qDebug() << "[PLAY]Sync result is " << ready << ", video time stamp is " << videoPtsSec;
                     break;
                 }
                 if (quit_) {
@@ -510,12 +560,12 @@ void AVPlayer::doPlayVideo()
                 }
             }
 
-            if (isSeek_ || quit_)
+            if (shouldAbortForSeekOrQuit(queuedFrame.seekSerial, seekSerial_.load(), isSeek_, quit_))
             {
                 continue;
             }
 
-            emit videoframeReady(av_frame_clone(frame.value().get()));
+            emit videoframeReady(av_frame_clone(queuedFrame.frame.get()));
         }
     }
 }

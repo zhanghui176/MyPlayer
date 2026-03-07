@@ -5,6 +5,8 @@
 
 #include <string>
 #include <atomic>
+#include <cstdint>
+#include <utility>
 #include <mutex>
 #include <condition_variable>
 #include "AVDemuxer.h"
@@ -13,6 +15,48 @@
 #include <QtConcurrent/qtconcurrentrun.h>
 #include "SyncTimer.h"
 #include "FrameFilter.h"
+
+struct QueuedPacket
+{
+    AVPacketPtr packet;
+    uint64_t seekSerial = 0;
+    bool eof = false;
+
+    QueuedPacket() = default;
+    QueuedPacket(AVPacketPtr pkt, uint64_t serial)
+        : packet(std::move(pkt)), seekSerial(serial), eof(false)
+    {
+    }
+
+    static QueuedPacket makeEof(uint64_t serial)
+    {
+        QueuedPacket item;
+        item.seekSerial = serial;
+        item.eof = true;
+        return item;
+    }
+};
+
+struct QueuedFrame
+{
+    AVFramePtr frame;
+    uint64_t seekSerial = 0;
+    bool eof = false;
+
+    QueuedFrame() = default;
+    QueuedFrame(AVFramePtr frm, uint64_t serial)
+        : frame(std::move(frm)), seekSerial(serial), eof(false)
+    {
+    }
+
+    static QueuedFrame makeEof(uint64_t serial)
+    {
+        QueuedFrame item;
+        item.seekSerial = serial;
+        item.eof = true;
+        return item;
+    }
+};
 
 class AVPlayer :public QObject
 {
@@ -49,12 +93,12 @@ private:
     QFuture<void> audioPlayFuture_;
     QFuture<void> subtitlePlayFuture_;
     QFuture<void> demuxFuture_;
-    AVQueue<AVPacketPtr> videoPacketQueue_;
-    AVQueue<AVPacketPtr> audioPacketQueue_;
-    AVQueue<AVPacketPtr> subtitlePacketQueue_;
-    AVQueue<AVFramePtr> videoFrameQueue_;
-    AVQueue<AVFramePtr> audioFrameQueue_;
-    AVQueue<AVFramePtr> subtitleFrameQueue_;
+    AVQueue<QueuedPacket> videoPacketQueue_;
+    AVQueue<QueuedPacket> audioPacketQueue_;
+    AVQueue<QueuedPacket> subtitlePacketQueue_;
+    AVQueue<QueuedFrame> videoFrameQueue_;
+    AVQueue<QueuedFrame> audioFrameQueue_;
+    AVQueue<QueuedFrame> subtitleFrameQueue_;
     std::unique_ptr<AudioPlayer> audioPlayer_;
     std::atomic<bool> audioStart_ = false;
     double audioTimestamp_ = 0;
@@ -62,6 +106,8 @@ private:
     SyncTimer syncTimer_;
     std::shared_ptr<FrameFilter> videoFilter_;
     std::atomic<bool> isSeek_ = false;
+    // Increments on each successful seek. Workers drop packets/frames from older generations.
+    std::atomic<uint64_t> seekSerial_ = 0;
     std::mutex seekMutex_;
     std::mutex seekStateMutex_;
     std::condition_variable seekCv_;
