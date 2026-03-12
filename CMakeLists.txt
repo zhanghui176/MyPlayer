@@ -5,8 +5,11 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets OpenGL OpenGLWidgets Multi
 
 qt_standard_project_setup()
 
-set(OPENCV_ROOT "D:/lib/opencv/opencv-build/")
+set(OPENCV_ROOT "D:/lib/opencv410/opencv-build-contrib")
 set(FFMPEG_ROOT "D:/lib/ffmpeg-7.1.1-full_build-shared/")
+set(MYPLAYER_MODELS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models")
+set(OPENCV_DNN_LIB "${OPENCV_ROOT}/lib/libopencv_dnn4100.dll.a")
+set(OPENCV_OBJDETECT_LIB "${OPENCV_ROOT}/lib/libopencv_objdetect4100.dll.a")
 
 if(NOT "${OPENCV_ROOT}" STREQUAL "")
     message(STATUS "OpenCV root path: ${OPENCV_ROOT}")
@@ -49,6 +52,10 @@ qt_add_executable(MyPlayer
     AudioPlayer.h AudioPlayer.cpp
     SyncTimer.h
     FrameFilter.h FrameFilter.cpp
+    OnnxFrameProcessor.h OnnxFrameProcessor.cpp
+    FaceBoxDrawer.h FaceBoxDrawer.cpp
+    FaceDetectionRunner.h FaceDetectionRunner.cpp
+    ImageToImageOnnxRunner.h ImageToImageOnnxRunner.cpp
 )
 
 qt_add_resources(MyPlayer "resources"
@@ -76,16 +83,46 @@ target_link_libraries(MyPlayer PRIVATE
     "${FFMPEG_ROOT}/lib/libavfilter.dll.a"
 
     #OpenCV 库
-    "${OPENCV_ROOT}/lib/libopencv_core454.dll.a"
-    "${OPENCV_ROOT}/lib/libopencv_imgproc454.dll.a"
-    "${OPENCV_ROOT}/lib/libopencv_highgui454.dll.a"
-    "${OPENCV_ROOT}/lib/libopencv_videoio454.dll.a"
+    "${OPENCV_ROOT}/lib/libopencv_core4100.dll.a"
+    "${OPENCV_ROOT}/lib/libopencv_imgproc4100.dll.a"
+    "${OPENCV_ROOT}/lib/libopencv_highgui4100.dll.a"
+    "${OPENCV_ROOT}/lib/libopencv_videoio4100.dll.a"
 
     #系统库
     opengl32
     d3d11
     d3dcompiler
 )
+
+if(EXISTS "${OPENCV_DNN_LIB}")
+    target_link_libraries(MyPlayer PRIVATE "${OPENCV_DNN_LIB}")
+    target_compile_definitions(MyPlayer PRIVATE MYPLAYER_ENABLE_ONNX=1)
+    message(STATUS "OpenCV DNN library found. ONNX frame processing enabled.")
+
+    if(EXISTS "${OPENCV_OBJDETECT_LIB}")
+        target_link_libraries(MyPlayer PRIVATE "${OPENCV_OBJDETECT_LIB}")
+        target_compile_definitions(MyPlayer PRIVATE MYPLAYER_ENABLE_OPENCV_FACE=1)
+        message(STATUS "OpenCV objdetect library found. Face detection overlay enabled.")
+    else()
+        message(WARNING "OpenCV objdetect library not found: ${OPENCV_OBJDETECT_LIB}")
+        message(WARNING "Face detection overlay will be disabled.")
+    endif()
+else()
+    message(WARNING "OpenCV DNN library not found: ${OPENCV_DNN_LIB}")
+    message(WARNING "ONNX frame processing will be disabled.")
+endif()
+
+if(EXISTS "${MYPLAYER_MODELS_DIR}")
+    add_custom_command(TARGET MyPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MyPlayer>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${MYPLAYER_MODELS_DIR}"
+                "$<TARGET_FILE_DIR:MyPlayer>/models"
+        COMMENT "Copying model assets to output directory"
+    )
+else()
+    message(WARNING "Models directory not found: ${MYPLAYER_MODELS_DIR}")
+endif()
 
 message(STATUS "OpenCV directory exists")
 
@@ -102,5 +139,6 @@ qt_generate_deploy_app_script(
     OUTPUT_SCRIPT deploy_script
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
+
 
 install(SCRIPT ${deploy_script})

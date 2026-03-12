@@ -15,6 +15,7 @@
 #include <QtConcurrent/qtconcurrentrun.h>
 #include "SyncTimer.h"
 #include "FrameFilter.h"
+#include "OnnxFrameProcessor.h"
 
 struct QueuedPacket
 {
@@ -76,6 +77,8 @@ public:
     void doSeek(double pos);
     double getCurrentTimeSec();
     double getDurationSec();
+    void setVideoOnnxModel(const std::string& modelPath);
+    const std::string& getVideoOnnxModel() const;
 
 signals:
     void videoframeReady(AVFrame* frame);
@@ -105,6 +108,8 @@ private:
     std::map<int, std::shared_ptr<CodecWrapper>> currentStreams_;
     SyncTimer syncTimer_;
     std::shared_ptr<FrameFilter> videoFilter_;
+    std::unique_ptr<OnnxFrameProcessor> onnxProcessor_;
+    std::string onnxModelPath_;
     std::atomic<bool> isSeek_ = false;
     // Increments on each successful seek. Workers drop packets/frames from older generations.
     std::atomic<uint64_t> seekSerial_ = 0;

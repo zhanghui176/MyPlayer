@@ -1,6 +1,9 @@
 #include "AVPlayer.h"
 #include <QDebug>
 #include <cmath>
+#include <cstdlib>
+#include <QCoreApplication>
+#include <QDir>
 
 namespace {
 
@@ -14,12 +17,27 @@ inline bool shouldAbortForSeekOrQuit(uint64_t itemSerial, uint64_t currentSerial
     return isQuitting || isSeekStale(itemSerial, currentSerial, isSeeking);
 }
 
+std::string readOnnxModelFromEnv()
+{
+    const char* path = std::getenv("MYPLAYER_ONNX_MODEL");
+    if (!path)
+    {
+        return std::string();
+    }
+    return std::string(path);
+}
+
 }  // namespace
 
 AVPlayer::AVPlayer()
     : demuxer_(std::make_shared<AVDemuxer>())
     , videoFilter_(nullptr)
 {
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString modelPath = QDir(appDir).filePath("models/yunet_n_640_640.onnx");
+    onnxModelPath_ = modelPath.toStdString();
+    qDebug() << "appDir : " << appDir << ", onnxModelPath_ is " << onnxModelPath_;
+
 }
 
 void AVPlayer::waitForSeekIfNeeded()
@@ -49,6 +67,16 @@ AVPlayer::~AVPlayer()
 void AVPlayer::setUrl(std::string url)
 {
     url_ = url;
+}
+
+void AVPlayer::setVideoOnnxModel(const std::string& modelPath)
+{
+    onnxModelPath_ = modelPath;
+}
+
+const std::string& AVPlayer::getVideoOnnxModel() const
+{
+    return onnxModelPath_;
 }
 
 double AVPlayer::getCurrentTimeSec()
@@ -108,7 +136,33 @@ void AVPlayer::doload()
 
     if (currentStreams_.find(AVMEDIA_TYPE_VIDEO) != currentStreams_.end())
     {
-        videoFilter_ = std::make_shared<FrameFilter>(currentStreams_.find(AVMEDIA_TYPE_VIDEO)->second->getAvctx(), "hue=s=0");
+        videoFilter_.reset();
+        onnxProcessor_.reset();
+
+        if (onnxModelPath_.empty())
+        {
+            onnxModelPath_ = readOnnxModelFromEnv();
+        }
+
+        if (!onnxModelPath_.empty())
+        {
+            auto onnxProcessor = std::make_unique<OnnxFrameProcessor>();
+            if (onnxProcessor->loadModel(onnxModelPath_))
+            {
+                onnxProcessor_ = std::move(onnxProcessor);
+                qDebug() << "ONNX video processing enabled:" << onnxModelPath_.c_str();
+            }
+            else
+            {
+                qDebug() << "Failed to load ONNX model, fallback to FFmpeg filter:" << onnxModelPath_.c_str();
+            }
+        }
+
+        if (!onnxProcessor_)
+        {
+            videoFilter_ = std::make_shared<FrameFilter>(currentStreams_.find(AVMEDIA_TYPE_VIDEO)->second->getAvctx(), "hue=s=0");
+        }
+
         videoDecodeFuture_ = QtConcurrent::run(&threadPool_, &AVPlayer::doVideoDecode, this);
         videoPlayFuture_ = QtConcurrent::run(&threadPool_, &AVPlayer::doPlayVideo, this);
     }
@@ -462,7 +516,22 @@ void AVPlayer::doVideoDecode()
             qDebug() << "video frame decode failed, continue";
             continue;
         }
-        if (videoFilter_)
+
+        // Keep ONNX and FFmpeg filter mutually exclusive to avoid double processing.
+        if (onnxProcessor_)
+        {
+            frame = onnxProcessor_->process(std::move(frame));
+            if (!frame)
+            {
+                qDebug() << "ONNX processing returned empty frame";
+                continue;
+            }
+
+            videoFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
+            qDebug() << "enqueue video frame after ONNX processing";
+            continue;
+        }
+        else if (videoFilter_)
         {
             auto filteredFrame = videoFilter_->doFilt(std::move(frame));
             if (filteredFrame)
