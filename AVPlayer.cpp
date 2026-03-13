@@ -1,9 +1,11 @@
 #include "AVPlayer.h"
 #include <QDebug>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <QCoreApplication>
 #include <QDir>
+#include <OnnxFrameProcessor.h>
 
 namespace {
 
@@ -37,7 +39,8 @@ AVPlayer::AVPlayer()
     QString modelPath = QDir(appDir).filePath("models/yunet_n_640_640.onnx");
     onnxModelPath_ = modelPath.toStdString();
     qDebug() << "appDir : " << appDir << ", onnxModelPath_ is " << onnxModelPath_;
-
+    setFaceDetectionInputMode(OnnxFrameProcessor::FaceInputMode::FixedSize);
+    setFaceDetectionFixedInputSize(640, 640);
 }
 
 void AVPlayer::waitForSeekIfNeeded()
@@ -77,6 +80,36 @@ void AVPlayer::setVideoOnnxModel(const std::string& modelPath)
 const std::string& AVPlayer::getVideoOnnxModel() const
 {
     return onnxModelPath_;
+}
+
+void AVPlayer::setFaceDetectionInputMode(OnnxFrameProcessor::FaceInputMode mode)
+{
+    faceInputMode_ = mode;
+    if (onnxProcessor_)
+    {
+        onnxProcessor_->setFaceDetectionInputMode(mode);
+    }
+}
+
+OnnxFrameProcessor::FaceInputMode AVPlayer::faceDetectionInputMode() const
+{
+    return faceInputMode_;
+}
+
+void AVPlayer::setFaceDetectionFixedInputSize(int width, int height)
+{
+    faceFixedInputWidth_ = std::max(1, width);
+    faceFixedInputHeight_ = std::max(1, height);
+
+    if (onnxProcessor_)
+    {
+        onnxProcessor_->setFaceDetectionFixedInputSize(faceFixedInputWidth_, faceFixedInputHeight_);
+    }
+}
+
+std::pair<int, int> AVPlayer::faceDetectionFixedInputSize() const
+{
+    return std::pair<int, int>(faceFixedInputWidth_, faceFixedInputHeight_);
 }
 
 double AVPlayer::getCurrentTimeSec()
@@ -147,6 +180,8 @@ void AVPlayer::doload()
         if (!onnxModelPath_.empty())
         {
             auto onnxProcessor = std::make_unique<OnnxFrameProcessor>();
+            onnxProcessor->setFaceDetectionInputMode(faceInputMode_);
+            onnxProcessor->setFaceDetectionFixedInputSize(faceFixedInputWidth_, faceFixedInputHeight_);
             if (onnxProcessor->loadModel(onnxModelPath_))
             {
                 onnxProcessor_ = std::move(onnxProcessor);

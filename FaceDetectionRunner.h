@@ -13,6 +13,12 @@
 class FaceDetectionRunner
 {
 public:
+    enum class InputResizeMode
+    {
+        DynamicInputSize,
+        FixedSize,
+    };
+
     FaceDetectionRunner();
 
     bool loadModel(const std::string& modelPath);
@@ -20,8 +26,15 @@ public:
     bool isReady() const;
     void reset();
 
+    void setInputResizeMode(InputResizeMode mode);
+    InputResizeMode inputResizeMode() const;
+    void setFixedInputSize(int width, int height);
+    cv::Size fixedInputSize() const;
+
 private:
     bool ready_ = false;
+    InputResizeMode inputResizeMode_ = InputResizeMode::DynamicInputSize;
+    cv::Size fixedInputSize_ = cv::Size(640, 640);
 
 #if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
     cv::Ptr<cv::FaceDetectorYN> detector_;

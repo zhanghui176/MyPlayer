@@ -79,6 +79,10 @@ public:
     double getDurationSec();
     void setVideoOnnxModel(const std::string& modelPath);
     const std::string& getVideoOnnxModel() const;
+    void setFaceDetectionInputMode(OnnxFrameProcessor::FaceInputMode mode);
+    OnnxFrameProcessor::FaceInputMode faceDetectionInputMode() const;
+    void setFaceDetectionFixedInputSize(int width, int height);
+    std::pair<int, int> faceDetectionFixedInputSize() const;
 
 signals:
     void videoframeReady(AVFrame* frame);
@@ -110,6 +114,9 @@ private:
     std::shared_ptr<FrameFilter> videoFilter_;
     std::unique_ptr<OnnxFrameProcessor> onnxProcessor_;
     std::string onnxModelPath_;
+    OnnxFrameProcessor::FaceInputMode faceInputMode_ = OnnxFrameProcessor::FaceInputMode::DynamicInputSize;
+    int faceFixedInputWidth_ = 640;
+    int faceFixedInputHeight_ = 640;
     std::atomic<bool> isSeek_ = false;
     // Increments on each successful seek. Workers drop packets/frames from older generations.
     std::atomic<uint64_t> seekSerial_ = 0;

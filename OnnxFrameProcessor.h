@@ -7,6 +7,12 @@
 class OnnxFrameProcessor
 {
 public:
+    enum class FaceInputMode
+    {
+        DynamicInputSize,
+        FixedSize,
+    };
+
     OnnxFrameProcessor();
     ~OnnxFrameProcessor();
 
@@ -17,6 +23,9 @@ public:
     AVFramePtr process(AVFramePtr inputFrame);
     bool isReady() const;
     const std::string& modelPath() const;
+    void setFaceDetectionInputMode(FaceInputMode mode);
+    FaceInputMode faceDetectionInputMode() const;
+    void setFaceDetectionFixedInputSize(int width, int height);
 
 private:
     struct Impl;
