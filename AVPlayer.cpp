@@ -433,7 +433,6 @@ void AVPlayer::doAudioDecode()
             continue;
         }
         audioFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
-        qDebug() << "[PLAY]decode successfully, audioFrameQueue_ size = " << audioFrameQueue_.size();
     }
 }
 
@@ -563,7 +562,6 @@ void AVPlayer::doVideoDecode()
             }
 
             videoFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
-            qDebug() << "enqueue video frame after ONNX processing";
             continue;
         }
         else if (videoFilter_)
@@ -572,7 +570,6 @@ void AVPlayer::doVideoDecode()
             if (filteredFrame)
             {
                 videoFrameQueue_.enqueue(QueuedFrame(std::move(filteredFrame), queuedPkt.seekSerial));
-                qDebug() << "[PLAY]enqueue video frame after doFilt, queue size is " << videoFrameQueue_.size();
             }
             else
             {
@@ -582,7 +579,6 @@ void AVPlayer::doVideoDecode()
         else
         {
             videoFrameQueue_.enqueue(QueuedFrame(std::move(frame), queuedPkt.seekSerial));
-            qDebug() << "enqueue video frame without doFilt";
         }
     }
 }
@@ -631,8 +627,6 @@ void AVPlayer::doPlayVideo()
             qDebug() << "Video playback finished (EOF)";
             return;
         }
-        qDebug() << "frame enqueue height: " << queuedFrame.frame.get()->height  << ",width is "
-                 << queuedFrame.frame.get()->width << ",audioStart_ is " << audioStart_;
         if (audioPlayer_ && audioStart_)
         {
             int64_t pts = queuedFrame.frame.get()->best_effort_timestamp;
@@ -656,7 +650,6 @@ void AVPlayer::doPlayVideo()
                 const double audioTimeSec = audioPlayer_->getAudioTime();
                 const bool ready = syncTimer_.wait(true, videoPtsSec, 1, audioTimeSec);
                 if (ready) {
-                    qDebug() << "[PLAY]Sync result is " << ready << ", video time stamp is " << videoPtsSec;
                     break;
                 }
                 if (quit_) {

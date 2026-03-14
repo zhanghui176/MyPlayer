@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 
@@ -29,7 +30,7 @@ struct OnnxFrameProcessor::Impl
 
     std::string modelPath;
     bool ready = false;
-    FaceInputMode faceInputMode = FaceInputMode::DynamicInputSize;
+    OnnxFrameProcessor::FaceInputMode faceInputMode = OnnxFrameProcessor::FaceInputMode::DynamicInputSize;
     int faceFixedInputWidth = 640;
     int faceFixedInputHeight = 640;
 
@@ -38,6 +39,8 @@ struct OnnxFrameProcessor::Impl
     ModelKind modelKind = ModelKind::None;
     SwsContext* srcToRgbCtx = nullptr;
     SwsContext* rgbToYuvCtx = nullptr;
+    std::uint64_t faceFrameCounter = 0;
+    int lastLoggedFaceDetectInterval = 0;
 
     FaceDetectionRunner faceDetectionRunner;
     ImageToImageOnnxRunner imageToImageRunner;
@@ -61,6 +64,8 @@ struct OnnxFrameProcessor::Impl
 #if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
 namespace {
 
+constexpr const char* kOnnxFaceTraceTitle = "[MYPLAYER_ONNX_FACE]";
+
 std::string toLowerCopy(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
@@ -78,11 +83,34 @@ bool looksLikeFaceDetectionModel(const std::string& modelPath)
         || lowerPath.find("scrfd") != std::string::npos;
 }
 
-FaceDetectionRunner::InputResizeMode toRunnerFaceInputMode(OnnxFrameProcessor::FaceInputMode mode)
+FaceDetectionRunner::InputResizeMode toRunnerResizeMode(OnnxFrameProcessor::FaceInputMode mode)
 {
-    return mode == OnnxFrameProcessor::FaceInputMode::FixedSize
-        ? FaceDetectionRunner::InputResizeMode::FixedSize
-        : FaceDetectionRunner::InputResizeMode::DynamicInputSize;
+    switch (mode)
+    {
+    case OnnxFrameProcessor::FaceInputMode::FixedSize:
+        return FaceDetectionRunner::InputResizeMode::FixedSize;
+    case OnnxFrameProcessor::FaceInputMode::DynamicInputSize:
+    default:
+        return FaceDetectionRunner::InputResizeMode::DynamicInputSize;
+    }
+}
+
+int chooseFaceDetectInterval(int width, int height)
+{
+    const std::int64_t pixelCount = static_cast<std::int64_t>(width) * static_cast<std::int64_t>(height);
+    if (pixelCount >= static_cast<std::int64_t>(1920 * 1080))
+    {
+        return 4;
+    }
+    if (pixelCount >= static_cast<std::int64_t>(1280 * 720))
+    {
+        return 3;
+    }
+    if (pixelCount >= static_cast<std::int64_t>(640 * 360))
+    {
+        return 2;
+    }
+    return 1;
 }
 
 AVFramePtr allocFrame(int width, int height, AVPixelFormat format)
@@ -221,7 +249,9 @@ AVFramePtr processFaceDetectionFrame(
     AVFramePtr inputFrame,
     SwsContext*& srcToRgbCtx,
     SwsContext*& rgbToYuvCtx,
-    FaceDetectionRunner& faceDetectionRunner
+    FaceDetectionRunner& faceDetectionRunner,
+    std::uint64_t& faceFrameCounter,
+    int& lastLoggedFaceDetectInterval
 )
 {
     AVFramePtr rgbFrame = convertSourceToRgb(srcToRgbCtx, inputFrame.get());
@@ -232,7 +262,25 @@ AVFramePtr processFaceDetectionFrame(
     }
 
     cv::Mat rgbMat(rgbFrame->height, rgbFrame->width, CV_8UC3, rgbFrame->data[0], rgbFrame->linesize[0]);
-    faceDetectionRunner.runOnRgbFrame(rgbMat);
+    const int detectInterval = chooseFaceDetectInterval(rgbFrame->width, rgbFrame->height);
+    if (lastLoggedFaceDetectInterval != detectInterval)
+    {
+        qDebug() << kOnnxFaceTraceTitle << "[PERF] face detection interval =" << detectInterval
+                 << "frame =" << rgbFrame->width << "x" << rgbFrame->height;
+        lastLoggedFaceDetectInterval = detectInterval;
+    }
+
+    const bool shouldRunDetection = (faceFrameCounter % static_cast<std::uint64_t>(detectInterval)) == 0;
+    ++faceFrameCounter;
+
+    if (shouldRunDetection)
+    {
+        faceDetectionRunner.runOnRgbFrame(rgbMat);
+    }
+    else
+    {
+        faceDetectionRunner.drawLastDetections(rgbMat);
+    }
 
     AVFramePtr outputFrame = convertRgbToYuv420p(rgbToYuvCtx, rgbFrame.get());
     if (!outputFrame)
@@ -312,10 +360,10 @@ bool OnnxFrameProcessor::loadModel(const std::string& modelPath)
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->ready = false;
     impl_->modelKind = Impl::ModelKind::None;
+    impl_->faceFrameCounter = 0;
+    impl_->lastLoggedFaceDetectInterval = 0;
     impl_->faceDetectionRunner.reset();
     impl_->imageToImageRunner.reset();
-    impl_->faceDetectionRunner.setInputResizeMode(toRunnerFaceInputMode(impl_->faceInputMode));
-    impl_->faceDetectionRunner.setFixedInputSize(impl_->faceFixedInputWidth, impl_->faceFixedInputHeight);
 
     if (looksLikeFaceDetectionModel(modelPath))
     {
@@ -349,39 +397,6 @@ bool OnnxFrameProcessor::loadModel(const std::string& modelPath)
 #endif
 }
 
-void OnnxFrameProcessor::setFaceDetectionInputMode(FaceInputMode mode)
-{
-#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-#endif
-    impl_->faceInputMode = mode;
-
-#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
-    impl_->faceDetectionRunner.setInputResizeMode(toRunnerFaceInputMode(mode));
-#endif
-}
-
-OnnxFrameProcessor::FaceInputMode OnnxFrameProcessor::faceDetectionInputMode() const
-{
-    return impl_->faceInputMode;
-}
-
-void OnnxFrameProcessor::setFaceDetectionFixedInputSize(int width, int height)
-{
-    const int sanitizedWidth = std::max(1, width);
-    const int sanitizedHeight = std::max(1, height);
-
-#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-#endif
-    impl_->faceFixedInputWidth = sanitizedWidth;
-    impl_->faceFixedInputHeight = sanitizedHeight;
-
-#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
-    impl_->faceDetectionRunner.setFixedInputSize(sanitizedWidth, sanitizedHeight);
-#endif
-}
-
 AVFramePtr OnnxFrameProcessor::process(AVFramePtr inputFrame)
 {
 #if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
@@ -407,7 +422,9 @@ AVFramePtr OnnxFrameProcessor::process(AVFramePtr inputFrame)
             std::move(inputFrame),
             impl_->srcToRgbCtx,
             impl_->rgbToYuvCtx,
-            impl_->faceDetectionRunner);
+            impl_->faceDetectionRunner,
+            impl_->faceFrameCounter,
+            impl_->lastLoggedFaceDetectInterval);
     }
 
     if (impl_->modelKind == Impl::ModelKind::ImageToImage)
@@ -433,4 +450,36 @@ bool OnnxFrameProcessor::isReady() const
 const std::string& OnnxFrameProcessor::modelPath() const
 {
     return impl_->modelPath;
+}
+
+void OnnxFrameProcessor::setFaceDetectionInputMode(FaceInputMode mode)
+{
+    impl_->faceInputMode = mode;
+
+#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->faceFrameCounter = 0;
+    impl_->lastLoggedFaceDetectInterval = 0;
+    impl_->faceDetectionRunner.clearLastDetections();
+    impl_->faceDetectionRunner.setInputResizeMode(toRunnerResizeMode(mode));
+#endif
+}
+
+OnnxFrameProcessor::FaceInputMode OnnxFrameProcessor::faceDetectionInputMode() const
+{
+    return impl_->faceInputMode;
+}
+
+void OnnxFrameProcessor::setFaceDetectionFixedInputSize(int width, int height)
+{
+    impl_->faceFixedInputWidth = std::max(1, width);
+    impl_->faceFixedInputHeight = std::max(1, height);
+
+#if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->faceFrameCounter = 0;
+    impl_->lastLoggedFaceDetectInterval = 0;
+    impl_->faceDetectionRunner.clearLastDetections();
+    impl_->faceDetectionRunner.setFixedInputSize(impl_->faceFixedInputWidth, impl_->faceFixedInputHeight);
+#endif
 }

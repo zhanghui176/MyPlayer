@@ -30,6 +30,8 @@ public:
     InputResizeMode inputResizeMode() const;
     void setFixedInputSize(int width, int height);
     cv::Size fixedInputSize() const;
+    void drawLastDetections(cv::Mat& rgbFrame) const;
+    void clearLastDetections();
 
 private:
     bool ready_ = false;
@@ -40,5 +42,7 @@ private:
     cv::Ptr<cv::FaceDetectorYN> detector_;
     cv::Size inputSize_ = cv::Size(0, 0);
     FaceBoxDrawer boxDrawer_;
+    cv::Mat lastFaces_;
+    cv::Size lastFacesFrameSize_ = cv::Size(0, 0);
 #endif
 };

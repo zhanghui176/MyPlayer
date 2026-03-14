@@ -68,6 +68,7 @@ FaceDetectionRunner::FaceDetectionRunner() = default;
 void FaceDetectionRunner::setInputResizeMode(InputResizeMode mode)
 {
     inputResizeMode_ = mode;
+    clearLastDetections();
     qDebug() << kFaceTraceTitle << "[CONFIG] setInputResizeMode =" << resizeModeToString(mode);
 }
 
@@ -79,6 +80,7 @@ FaceDetectionRunner::InputResizeMode FaceDetectionRunner::inputResizeMode() cons
 void FaceDetectionRunner::setFixedInputSize(int width, int height)
 {
     fixedInputSize_ = sanitizeSize(cv::Size(width, height));
+    clearLastDetections();
     qDebug() << kFaceTraceTitle << "[CONFIG] setFixedInputSize ="
              << fixedInputSize_.width << "x" << fixedInputSize_.height;
 }
@@ -86,6 +88,34 @@ void FaceDetectionRunner::setFixedInputSize(int width, int height)
 cv::Size FaceDetectionRunner::fixedInputSize() const
 {
     return fixedInputSize_;
+}
+
+void FaceDetectionRunner::drawLastDetections(cv::Mat& rgbFrame) const
+{
+#if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
+    if (rgbFrame.empty())
+    {
+        return;
+    }
+
+    const cv::Size frameSize(rgbFrame.cols, rgbFrame.rows);
+    if (frameSize != lastFacesFrameSize_)
+    {
+        return;
+    }
+
+    boxDrawer_.draw(rgbFrame, lastFaces_);
+#else
+    Q_UNUSED(rgbFrame);
+#endif
+}
+
+void FaceDetectionRunner::clearLastDetections()
+{
+#if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
+    lastFaces_.release();
+    lastFacesFrameSize_ = cv::Size(0, 0);
+#endif
 }
 
 bool FaceDetectionRunner::loadModel(const std::string& modelPath)
@@ -223,7 +253,9 @@ bool FaceDetectionRunner::runOnRgbFrame(cv::Mat& rgbFrame)
         scaleFaceCoords(facesFloat, scaleX, scaleY);
     }
 
-    boxDrawer_.draw(rgbFrame, facesFloat);
+    lastFaces_ = facesFloat.clone();
+    lastFacesFrameSize_ = frameSize;
+    boxDrawer_.draw(rgbFrame, lastFaces_);
     return true;
 #else
     Q_UNUSED(rgbFrame);
@@ -239,6 +271,7 @@ bool FaceDetectionRunner::isReady() const
 void FaceDetectionRunner::reset()
 {
     ready_ = false;
+    clearLastDetections();
 #if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
     detector_.release();
     inputSize_ = cv::Size(0, 0);
