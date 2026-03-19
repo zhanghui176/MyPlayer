@@ -1,13 +1,17 @@
 #include "AVPlayer.h"
+#include "AppPaths.h"
+#include "FaceSampleImporter.h"
+
 #include <QDebug>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <QCoreApplication>
-#include <QDir>
+
 #include <OnnxFrameProcessor.h>
 
 namespace {
+
+constexpr const char* kFaceImportTraceTitle = "[MYPLAYER_FACE_IMPORT]";
 
 inline bool isSeekStale(uint64_t itemSerial, uint64_t currentSerial, bool isSeeking)
 {
@@ -29,16 +33,29 @@ std::string readOnnxModelFromEnv()
     return std::string(path);
 }
 
+void initializeFaceAssets()
+{
+    static std::once_flag initialized;
+    std::call_once(initialized, []() {
+        const FaceSampleImporter::Result result = FaceSampleImporter::importSamples();
+        qDebug() << kFaceImportTraceTitle << "[INIT] imported =" << result.importedCount
+                 << "skipped =" << result.skippedCount
+                 << "failed =" << result.failedCount;
+    });
+}
+
 }  // namespace
 
 AVPlayer::AVPlayer()
     : demuxer_(std::make_shared<AVDemuxer>())
     , videoFilter_(nullptr)
 {
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString modelPath = QDir(appDir).filePath("models/yunet_n_640_640.onnx");
+    initializeFaceAssets();
+
+    const QString runtimeDir = AppPaths::getRuntimeDir();
+    const QString modelPath = AppPaths::getFaceDetectionModelPath();
     onnxModelPath_ = modelPath.toStdString();
-    qDebug() << "appDir : " << appDir << ", onnxModelPath_ is " << onnxModelPath_;
+    qDebug() << "runtimeDir : " << runtimeDir << ", onnxModelPath_ is " << onnxModelPath_;
     setFaceDetectionInputMode(OnnxFrameProcessor::FaceInputMode::FixedSize);
     setFaceDetectionFixedInputSize(640, 640);
 }

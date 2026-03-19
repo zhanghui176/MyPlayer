@@ -22,6 +22,7 @@ public:
     bool isOpen() const;
     bool ensureSchema();
     int upsertPerson(const QString& personName, const QString& note = QString());
+    bool hasFaceSample(const QString& imagePath);
     bool addFaceSample(
         int personId,
         const QString& imagePath,

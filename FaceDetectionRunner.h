@@ -22,6 +22,7 @@ public:
     FaceDetectionRunner();
 
     bool loadModel(const std::string& modelPath);
+    bool detect(const cv::Mat& rgbFrame, cv::Mat& faces);
     bool runOnRgbFrame(cv::Mat& rgbFrame);
     bool isReady() const;
     void reset();

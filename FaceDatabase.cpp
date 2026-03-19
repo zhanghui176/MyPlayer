@@ -176,6 +176,29 @@ int FaceDatabase::upsertPerson(const QString& personName, const QString& note)
     return insertQuery.lastInsertId().toInt();
 }
 
+bool FaceDatabase::hasFaceSample(const QString& imagePath)
+{
+    if (!isOpen())
+    {
+        setLastError(QStringLiteral("Database is not open."));
+        return false;
+    }
+
+    QSqlQuery query(database_);
+    query.prepare(QStringLiteral(
+        "SELECT 1 FROM face_samples WHERE image_path = :image_path LIMIT 1"));
+    query.bindValue(QStringLiteral(":image_path"), imagePath);
+
+    if (!query.exec())
+    {
+        setLastError(query.lastError().text());
+        return false;
+    }
+
+    lastError_.clear();
+    return query.next();
+}
+
 bool FaceDatabase::addFaceSample(
     int personId,
     const QString& imagePath,

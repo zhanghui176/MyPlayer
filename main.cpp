@@ -1,7 +1,6 @@
 #include "mainwindow.h"
 
 #include <QApplication>
-#include "AVPlayer.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -13,6 +12,7 @@ extern "C" {
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
     MainWindow w;
     w.show();
     return a.exec();

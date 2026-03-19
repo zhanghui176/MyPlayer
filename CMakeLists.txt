@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.19)
 project(MyPlayer LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets OpenGL OpenGLWidgets Multimedia)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets OpenGL OpenGLWidgets Multimedia Sql)
 
 qt_standard_project_setup()
 
 set(OPENCV_ROOT "D:/lib/opencv410/opencv-build-contrib")
 set(FFMPEG_ROOT "D:/lib/ffmpeg-7.1.1-full_build-shared/")
 set(MYPLAYER_MODELS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models")
+set(MYPLAYER_FACE_SAMPLE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/faceSample")
 set(OPENCV_DNN_LIB "${OPENCV_ROOT}/lib/libopencv_dnn4100.dll.a")
 set(OPENCV_OBJDETECT_LIB "${OPENCV_ROOT}/lib/libopencv_objdetect4100.dll.a")
 
@@ -38,6 +39,7 @@ link_directories("${FFMPEG_ROOT}/lib")
 
 qt_add_executable(MyPlayer
     WIN32 MACOSX_BUNDLE
+    AppPaths.h
     main.cpp
     mainwindow.cpp
     mainwindow.h
@@ -55,6 +57,9 @@ qt_add_executable(MyPlayer
     OnnxFrameProcessor.h OnnxFrameProcessor.cpp
     FaceBoxDrawer.h FaceBoxDrawer.cpp
     FaceDetectionRunner.h FaceDetectionRunner.cpp
+    FaceRecognitionRunner.h FaceRecognitionRunner.cpp
+    FaceDatabase.h FaceDatabase.cpp
+    FaceSampleImporter.h FaceSampleImporter.cpp
     ImageToImageOnnxRunner.h ImageToImageOnnxRunner.cpp
 )
 
@@ -72,6 +77,7 @@ target_link_libraries(MyPlayer PRIVATE
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Multimedia
+    Qt6::Sql
 
     #FFMPEG 库
     "${FFMPEG_ROOT}/lib/libavcodec.dll.a"
@@ -122,6 +128,18 @@ if(EXISTS "${MYPLAYER_MODELS_DIR}")
     )
 else()
     message(WARNING "Models directory not found: ${MYPLAYER_MODELS_DIR}")
+endif()
+
+if(EXISTS "${MYPLAYER_FACE_SAMPLE_DIR}")
+    add_custom_command(TARGET MyPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MyPlayer>/faceSample"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${MYPLAYER_FACE_SAMPLE_DIR}"
+                "$<TARGET_FILE_DIR:MyPlayer>/faceSample"
+        COMMENT "Copying face samples to output directory"
+    )
+else()
+    message(WARNING "faceSample directory not found: ${MYPLAYER_FACE_SAMPLE_DIR}")
 endif()
 
 message(STATUS "OpenCV directory exists")

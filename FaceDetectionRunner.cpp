@@ -164,8 +164,10 @@ bool FaceDetectionRunner::loadModel(const std::string& modelPath)
 #endif
 }
 
-bool FaceDetectionRunner::runOnRgbFrame(cv::Mat& rgbFrame)
+bool FaceDetectionRunner::detect(const cv::Mat& rgbFrame, cv::Mat& faces)
 {
+    faces.release();
+
 #if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
     if (!ready_ || rgbFrame.empty() || detector_.empty())
     {
@@ -220,16 +222,15 @@ bool FaceDetectionRunner::runOnRgbFrame(cv::Mat& rgbFrame)
     cv::Mat bgrFrame;
     cv::cvtColor(detectRgb, bgrFrame, cv::COLOR_RGB2BGR);
 
-    cv::Mat faces;
-    const int result = detector_->detect(bgrFrame, faces);
+    cv::Mat detectedFaces;
+    const int result = detector_->detect(bgrFrame, detectedFaces);
     if (result < 0)
     {
         qDebug() << "FaceDetectionRunner detect failed on current frame";
         return false;
     }
 
-    cv::Mat facesFloat;
-    faces.convertTo(facesFloat, CV_32F);
+    detectedFaces.convertTo(faces, CV_32F);
 
     if (useFixedSize && detectSize.width > 0 && detectSize.height > 0
         && (detectSize.width != rgbFrame.cols || detectSize.height != rgbFrame.rows))
@@ -250,11 +251,28 @@ bool FaceDetectionRunner::runOnRgbFrame(cv::Mat& rgbFrame)
             lastLoggedDetectSize = detectSize;
         }
 
-        scaleFaceCoords(facesFloat, scaleX, scaleY);
+        scaleFaceCoords(faces, scaleX, scaleY);
     }
 
-    lastFaces_ = facesFloat.clone();
-    lastFacesFrameSize_ = frameSize;
+    return true;
+#else
+    Q_UNUSED(rgbFrame);
+    return false;
+#endif
+}
+
+bool FaceDetectionRunner::runOnRgbFrame(cv::Mat& rgbFrame)
+{
+#if defined(MYPLAYER_ENABLE_OPENCV_FACE) && MYPLAYER_ENABLE_OPENCV_FACE
+    cv::Mat faces;
+    if (!detect(rgbFrame, faces))
+    {
+        clearLastDetections();
+        return false;
+    }
+
+    lastFaces_ = faces.clone();
+    lastFacesFrameSize_ = cv::Size(rgbFrame.cols, rgbFrame.rows);
     boxDrawer_.draw(rgbFrame, lastFaces_);
     return true;
 #else
