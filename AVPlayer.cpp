@@ -1,5 +1,4 @@
 #include "AVPlayer.h"
-#include "AppPaths.h"
 #include "FaceSampleImporter.h"
 
 #include <QDebug>
@@ -21,16 +20,6 @@ inline bool isSeekStale(uint64_t itemSerial, uint64_t currentSerial, bool isSeek
 inline bool shouldAbortForSeekOrQuit(uint64_t itemSerial, uint64_t currentSerial, bool isSeeking, bool isQuitting)
 {
     return isQuitting || isSeekStale(itemSerial, currentSerial, isSeeking);
-}
-
-std::string readOnnxModelFromEnv()
-{
-    const char* path = std::getenv("MYPLAYER_ONNX_MODEL");
-    if (!path)
-    {
-        return std::string();
-    }
-    return std::string(path);
 }
 
 void initializeFaceAssets()
@@ -157,7 +146,7 @@ double AVPlayer::getDurationSec()
     return static_cast<double>(fmtCtx->duration) / AV_TIME_BASE;
 }
 
-void AVPlayer::doload()
+void AVPlayer::doload(ModelKind modelKind)
 {
     quit_ = false;
     videoPacketQueue_.setActive(true);
@@ -189,17 +178,12 @@ void AVPlayer::doload()
         videoFilter_.reset();
         onnxProcessor_.reset();
 
-        if (onnxModelPath_.empty())
-        {
-            onnxModelPath_ = readOnnxModelFromEnv();
-        }
-
-        if (!onnxModelPath_.empty())
+        if (useModel_)
         {
             auto onnxProcessor = std::make_unique<OnnxFrameProcessor>();
             onnxProcessor->setFaceDetectionInputMode(faceInputMode_);
             onnxProcessor->setFaceDetectionFixedInputSize(faceFixedInputWidth_, faceFixedInputHeight_);
-            if (onnxProcessor->loadModel(onnxModelPath_))
+            if (onnxProcessor->loadModel(modelKind))
             {
                 onnxProcessor_ = std::move(onnxProcessor);
                 qDebug() << "ONNX video processing enabled:" << onnxModelPath_.c_str();
@@ -209,8 +193,7 @@ void AVPlayer::doload()
                 qDebug() << "Failed to load ONNX model, fallback to FFmpeg filter:" << onnxModelPath_.c_str();
             }
         }
-
-        if (!onnxProcessor_)
+        else
         {
             videoFilter_ = std::make_shared<FrameFilter>(currentStreams_.find(AVMEDIA_TYPE_VIDEO)->second->getAvctx(), "hue=s=0");
         }

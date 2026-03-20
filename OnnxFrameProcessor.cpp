@@ -1,5 +1,4 @@
 #include "OnnxFrameProcessor.h"
-#include "AppPaths.h"
 #include "FaceBoxDrawer.h"
 #include "FaceDatabase.h"
 #include "FaceDetectionRunner.h"
@@ -26,13 +25,6 @@ extern "C" {
 
 struct OnnxFrameProcessor::Impl
 {
-    enum class ModelKind
-    {
-        None,
-        ImageToImage,
-        FaceDetection,
-    };
-
     std::string modelPath_;
     bool ready_ = false;
     OnnxFrameProcessor::FaceInputMode faceInputMode_ = OnnxFrameProcessor::FaceInputMode::DynamicInputSize;
@@ -84,15 +76,6 @@ std::string toLowerCopy(std::string value)
         return static_cast<char>(std::tolower(c));
     });
     return value;
-}
-
-bool looksLikeFaceDetectionModel(const std::string& modelPath)
-{
-    const std::string lowerPath = toLowerCopy(modelPath);
-    return lowerPath.find("yunet") != std::string::npos
-        || lowerPath.find("face_detection") != std::string::npos
-        || lowerPath.find("retinaface") != std::string::npos
-        || lowerPath.find("scrfd") != std::string::npos;
 }
 
 FaceDetectionRunner::InputResizeMode toRunnerResizeMode(OnnxFrameProcessor::FaceInputMode mode)
@@ -449,21 +432,22 @@ OnnxFrameProcessor::OnnxFrameProcessor()
 
 OnnxFrameProcessor::~OnnxFrameProcessor() = default;
 
-bool OnnxFrameProcessor::loadModel(const std::string& modelPath)
+bool OnnxFrameProcessor::loadModel(ModelKind modelKind)
 {
-    impl_->modelPath_ = modelPath;
+    auto modelPath = AppPaths::getModelPathByKind(modelKind).toStdString();
 
 #if defined(MYPLAYER_ENABLE_ONNX) && MYPLAYER_ENABLE_ONNX
     if (modelPath.empty())
     {
         impl_->ready_ = false;
-        impl_->modelKind_ = Impl::ModelKind::None;
+        impl_->modelKind_ = ModelKind::None;
         return false;
     }
 
     std::lock_guard<std::mutex> lock(impl_->mutex_);
+    impl_->modelPath_ = modelPath;
     impl_->ready_ = false;
-    impl_->modelKind_ = Impl::ModelKind::None;
+    impl_->modelKind_ = modelKind;
     impl_->faceFrameCounter_ = 0;
     impl_->lastLoggedFaceDetectInterval_ = 0;
     impl_->faceDetectionRunner_.reset();
@@ -472,42 +456,43 @@ bool OnnxFrameProcessor::loadModel(const std::string& modelPath)
     impl_->faceIdentityCache_.clear();
     clearFaceOverlayCache(impl_->lastFaceDetections_, impl_->lastFaceLabels_, impl_->lastFaceFrameSize_);
 
-    if (looksLikeFaceDetectionModel(modelPath))
+    if (modelKind == ModelKind::FaceDetection)
     {
         if (impl_->faceDetectionRunner_.loadModel(modelPath))
         {
-            const std::string recognitionModelPath = AppPaths::getFaceRecognitionModelPath().toStdString();
+            auto recognitionModelPath = AppPaths::getFaceRecognitionModelPath().toStdString();
             if (impl_->faceRecognitionRunner_.loadModel(recognitionModelPath))
             {
                 impl_->faceIdentityCache_ = loadFaceIdentityCache();
                 qDebug() << kOnnxFaceTraceTitle << "[RECOGNITION] enabled, gallery size ="
-                         << impl_->faceIdentityCache_.size();
+                            << impl_->faceIdentityCache_.size();
             }
             else
             {
                 qDebug() << kOnnxFaceTraceTitle << "[RECOGNITION] disabled, unable to load model:"
-                         << recognitionModelPath.c_str();
+                            << recognitionModelPath.c_str();
             }
 
             impl_->ready_ = true;
-            impl_->modelKind_ = Impl::ModelKind::FaceDetection;
+            impl_->modelKind_ = ModelKind::FaceDetection;
             qDebug() << "ONNX face detection model loaded:" << modelPath.c_str();
             return true;
         }
-        qDebug() << "Face detector init failed, fallback to generic ONNX path:" << modelPath.c_str();
     }
-
-    if (impl_->imageToImageRunner_.loadModel(modelPath))
+    else if (modelKind == ModelKind::ImageToImage)
     {
-        impl_->ready_ = true;
-        impl_->modelKind_ = Impl::ModelKind::ImageToImage;
-        qDebug() << "ONNX image model loaded:" << modelPath.c_str();
-        return true;
+        if (impl_->imageToImageRunner_.loadModel(modelPath))
+        {
+            impl_->ready_ = true;
+            impl_->modelKind_ = ModelKind::ImageToImage;
+            qDebug() << "ONNX image model loaded:" << modelPath.c_str();
+            return true;
+        }
     }
 
     qDebug() << "Failed to load ONNX model:" << modelPath.c_str();
     impl_->ready_ = false;
-    impl_->modelKind_ = Impl::ModelKind::None;
+    impl_->modelKind_ = ModelKind::None;
     return false;
 #else
     Q_UNUSED(modelPath);
@@ -536,7 +521,7 @@ AVFramePtr OnnxFrameProcessor::process(AVFramePtr inputFrame)
 
         std::lock_guard<std::mutex> lock(impl_->mutex_);
 
-        if (impl_->modelKind_ == Impl::ModelKind::FaceDetection)
+    if (impl_->modelKind_ == ModelKind::FaceDetection)
     {
         return processFaceDetectionFrame(
             std::move(inputFrame),
@@ -552,8 +537,7 @@ AVFramePtr OnnxFrameProcessor::process(AVFramePtr inputFrame)
             impl_->faceFrameCounter_,
             impl_->lastLoggedFaceDetectInterval_);
     }
-
-        if (impl_->modelKind_ == Impl::ModelKind::ImageToImage)
+    else if (impl_->modelKind_ == ModelKind::ImageToImage)
     {
         return processImageToImageFrame(
             std::move(inputFrame),

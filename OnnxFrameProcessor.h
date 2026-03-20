@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include "AVDemuxer.h"
+#include "AppPaths.h"
 
 class OnnxFrameProcessor
 {
@@ -19,7 +20,7 @@ public:
     OnnxFrameProcessor(const OnnxFrameProcessor&) = delete;
     OnnxFrameProcessor& operator=(const OnnxFrameProcessor&) = delete;
 
-    bool loadModel(const std::string& modelPath);
+    bool loadModel(ModelKind modelKind);
     AVFramePtr process(AVFramePtr inputFrame);
     bool isReady() const;
     const std::string& modelPath() const;

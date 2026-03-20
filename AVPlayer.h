@@ -16,6 +16,7 @@
 #include "SyncTimer.h"
 #include "FrameFilter.h"
 #include "OnnxFrameProcessor.h"
+#include "AppPaths.h"
 
 struct QueuedPacket
 {
@@ -66,7 +67,7 @@ public:
     AVPlayer();
     ~AVPlayer();
     void setUrl(std::string url);
-    void doload();
+    void doload(ModelKind modelKind = ModelKind::FaceDetection);
     void doPlayVideo();
     void doPlayAudio();
     void doPlaySubtitle();
@@ -124,8 +125,7 @@ private:
     std::mutex seekStateMutex_;
     std::condition_variable seekCv_;
     std::atomic<double> currentVideoPtsSec_ = 0.0;
-
-
+    bool useModel_ = true;
 };
 
 #endif // AVPLAYER_H

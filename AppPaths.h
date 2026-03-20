@@ -4,12 +4,31 @@
 #include <QDir>
 #include <QString>
 
+enum class ModelKind
+{
+    None,
+    ImageToImage,
+    FaceDetection,
+};
 class AppPaths
 {
 public:
     static QString getRuntimeDir()
     {
         return QCoreApplication::applicationDirPath();
+    }
+
+    static QString getModelPathByKind(ModelKind kind)
+    {
+        switch (kind)
+        {
+        case ModelKind::FaceDetection:
+            return getFaceDetectionModelPath();
+        case ModelKind::ImageToImage:
+            // TODO: add specific model path for image-to-image models if needed
+        default:
+            return QString();
+        }
     }
 
     static QString getModelsDir()
