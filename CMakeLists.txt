@@ -45,7 +45,6 @@ qt_add_executable(MyPlayer
     mainwindow.h
     mainwindow.ui
 
-
     AVPlayer.h AVPlayer.cpp
     AVDemuxer.h AVDemuxer.cpp
     CodecWrapper.h CodecWrapper.cpp
@@ -61,6 +60,7 @@ qt_add_executable(MyPlayer
     FaceDatabase.h FaceDatabase.cpp
     FaceSampleImporter.h FaceSampleImporter.cpp
     ImageToImageOnnxRunner.h ImageToImageOnnxRunner.cpp
+    LogRedirector.h
 )
 
 qt_add_resources(MyPlayer "resources"

@@ -2,6 +2,8 @@
 
 #include <QApplication>
 
+#include "LogRedirector.h"
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
@@ -12,6 +14,8 @@ extern "C" {
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    LogRedirector::init(); // 日志重定向到 build/log/log.txt
 
     MainWindow w;
     w.show();
