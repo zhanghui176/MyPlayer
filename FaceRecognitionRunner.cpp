@@ -27,10 +27,6 @@ bool matToFloatVector(const cv::Mat& featureMat, std::vector<float>& values)
     flattened.convertTo(floatFeature, CV_32F);
 
     values.resize(static_cast<size_t>(floatFeature.total()));
-    if (values.empty())
-    {
-        return false;
-    }
 
     std::memcpy(values.data(), floatFeature.ptr<float>(), values.size() * sizeof(float));
     return true;
@@ -111,6 +107,7 @@ bool FaceRecognitionRunner::extractEmbedding(
         cv::cvtColor(rgbFrame, bgrFrame, cv::COLOR_RGB2BGR);
 
         cv::Mat alignedFace;
+        // cut the face from bgrFrame by faceRowFloat and save it to alignedFace
         recognizer_->alignCrop(bgrFrame, faceRowFloat, alignedFace);
         if (alignedFace.empty())
         {
