@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <memory>
+#include <atomic>
 #include "CodecWrapper.h"
 #include "QAVPacket.h"
 #include <mutex>
@@ -66,9 +67,11 @@ public:
     void clearEofFlag();
 
 private:
-    bool abortRequest_ = false;
-    bool eof_ = false;
-    std::map<std::string, std::string> inputOptions_;
+    void closeInput();
+
+private:
+    std::atomic<bool> abortRequest_ = false;
+    std::atomic<bool> eof_ = false;
     AVFormatContext* formatCtx_ = nullptr;
     std::string inputFormat_;
     std::map<int, std::shared_ptr<CodecWrapper>> availableStream_;

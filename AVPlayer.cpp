@@ -33,6 +33,30 @@ void initializeFaceAssets()
     });
 }
 
+double framePtsSeconds(const AVFrame* frame, const AVStream* stream)
+{
+    if (!frame || !stream)
+    {
+        return 0.0;
+    }
+
+    int64_t pts = frame->best_effort_timestamp;
+    if (pts == AV_NOPTS_VALUE)
+    {
+        pts = frame->pts;
+    }
+    if (pts == AV_NOPTS_VALUE)
+    {
+        pts = 0;
+    }
+    if (stream->start_time != AV_NOPTS_VALUE)
+    {
+        pts -= stream->start_time;
+    }
+
+    return pts * av_q2d(stream->time_base);
+}
+
 }  // namespace
 
 AVPlayer::AVPlayer()
@@ -148,7 +172,26 @@ double AVPlayer::getDurationSec()
 
 void AVPlayer::doload(ModelKind modelKind)
 {
+    stop();
+    if (demuxFuture_.isValid()) demuxFuture_.waitForFinished();
+    if (videoDecodeFuture_.isValid()) videoDecodeFuture_.waitForFinished();
+    if (videoPlayFuture_.isValid()) videoPlayFuture_.waitForFinished();
+    if (audioDecodeFuture_.isValid()) audioDecodeFuture_.waitForFinished();
+    if (audioPlayFuture_.isValid()) audioPlayFuture_.waitForFinished();
+    if (subtitlePlayFuture_.isValid()) subtitlePlayFuture_.waitForFinished();
+
+    if (demuxer_)
+    {
+        demuxer_->unLoad();
+        demuxer_->abort(false);
+    }
+
     quit_ = false;
+    currentStreams_.clear();
+    audioPlayer_.reset();
+    audioStart_ = false;
+    currentVideoPtsSec_.store(0.0);
+    syncTimer_.clear();
     videoPacketQueue_.setActive(true);
     audioPacketQueue_.setActive(true);
     subtitlePacketQueue_.setActive(true);
@@ -172,6 +215,7 @@ void AVPlayer::doload(ModelKind modelKind)
     demuxFuture_ = QtConcurrent::run(&threadPool_, &AVPlayer::doDemux, this);
 
     currentStreams_ = demuxer_->getCurrentStream();
+    audioStart_ = (currentStreams_.find(AVMEDIA_TYPE_AUDIO) == currentStreams_.end());
 
     if (currentStreams_.find(AVMEDIA_TYPE_VIDEO) != currentStreams_.end())
     {
@@ -286,6 +330,10 @@ void AVPlayer::doSeek(double pos)
 void AVPlayer::stop()
 {
     quit_ = true;
+    if (demuxer_)
+    {
+        demuxer_->abort(true);
+    }
     videoPacketQueue_.setActive(false);
     audioPacketQueue_.setActive(false);
     subtitlePacketQueue_.setActive(false);
@@ -604,7 +652,7 @@ void AVPlayer::doPlayVideo()
             return;
         }
 
-        if ((audioPlayer_ && !audioPlayer_->isAudioClockValid()) || !audioStart_)
+        if (audioPlayer_ && (!audioPlayer_->isAudioClockValid() || !audioStart_))
         {
             QThread::msleep(5);
             continue;
@@ -627,43 +675,38 @@ void AVPlayer::doPlayVideo()
             qDebug() << "Video playback finished (EOF)";
             return;
         }
-        if (audioPlayer_ && audioStart_)
-        {
-            int64_t pts = queuedFrame.frame.get()->best_effort_timestamp;
-            if (pts == AV_NOPTS_VALUE) {
-                pts = queuedFrame.frame.get()->pts;
-            }
-            if (pts == AV_NOPTS_VALUE) {
-                pts = 0;
-            }
-            if (videoIter->second->getStream()->start_time != AV_NOPTS_VALUE) {
-                pts -= videoIter->second->getStream()->start_time;
-            }
-            const double videoPtsSec = pts * av_q2d(videoIter->second->getStream()->time_base);
-            currentVideoPtsSec_.store(videoPtsSec);
-            for (;;)
-            {
-                if (shouldAbortForSeekOrQuit(queuedFrame.seekSerial, seekSerial_.load(), isSeek_, quit_))
-                {
-                    break;
-                }
-                const double audioTimeSec = audioPlayer_->getAudioTime();
-                const bool ready = syncTimer_.wait(true, videoPtsSec, 1, audioTimeSec);
-                if (ready) {
-                    break;
-                }
-                if (quit_) {
-                    return;
-                }
-            }
 
+        const double videoPtsSec = framePtsSeconds(queuedFrame.frame.get(), videoIter->second->getStream());
+        currentVideoPtsSec_.store(videoPtsSec);
+
+        for (;;)
+        {
             if (shouldAbortForSeekOrQuit(queuedFrame.seekSerial, seekSerial_.load(), isSeek_, quit_))
             {
-                continue;
+                break;
             }
 
-            emit videoframeReady(av_frame_clone(queuedFrame.frame.get()));
+            const double audioTimeSec = (audioPlayer_ && audioStart_)
+                ? audioPlayer_->getAudioTime()
+                : -1.0;
+            const bool ready = syncTimer_.wait(true, videoPtsSec, 1, audioTimeSec);
+            if (ready)
+            {
+                break;
+            }
+
+            if (quit_)
+            {
+                return;
+            }
         }
+
+        if (shouldAbortForSeekOrQuit(queuedFrame.seekSerial, seekSerial_.load(), isSeek_, quit_))
+        {
+            continue;
+        }
+
+        emit videoframeReady(av_frame_clone(queuedFrame.frame.get()));
     }
 }
 

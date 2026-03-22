@@ -2,29 +2,117 @@
 #include "CodecWrapper.h"
 #include <QDebug>
 
-AVDemuxer::AVDemuxer() 
+#include <algorithm>
+#include <cctype>
+
+namespace {
+
+std::string toLowerCopy(std::string value)
 {
-    formatCtx_ = avformat_alloc_context();
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
 }
+
+bool startsWithScheme(const std::string& url, const char* scheme)
+{
+    const std::string lowerUrl = toLowerCopy(url);
+    const std::string prefix = std::string(scheme) + "://";
+    return lowerUrl.rfind(prefix, 0) == 0;
+}
+
+bool isRtspUrl(const std::string& url)
+{
+    return startsWithScheme(url, "rtsp");
+}
+
+bool isRtmpUrl(const std::string& url)
+{
+    return startsWithScheme(url, "rtmp");
+}
+
+bool isNetworkStreamUrl(const std::string& url)
+{
+    return isRtspUrl(url) || isRtmpUrl(url);
+}
+
+void applyNetworkOptions(const std::string& url, AVDictionary** dict)
+{
+    if (!isNetworkStreamUrl(url))
+    {
+        return;
+    }
+
+    av_dict_set(dict, "rw_timeout", "15000000", 0);
+    av_dict_set(dict, "timeout", "15000000", 0);
+    av_dict_set(dict, "buffer_size", "1048576", 0);
+
+    if (isRtspUrl(url))
+    {
+        // VLC stream could not to be play if set it as tcp in local test
+        // av_dict_set(dict, "rtsp_transport", "tcp", 0);
+        av_dict_set(dict, "max_delay", "500000", 0);
+    }
+
+    if (isRtmpUrl(url))
+    {
+        av_dict_set(dict, "tcp_nodelay", "1", 0);
+    }
+}
+
+void freeFormatContext(AVFormatContext*& formatCtx)
+{
+    if (!formatCtx)
+    {
+        return;
+    }
+
+    if (formatCtx->iformat || formatCtx->pb)
+    {
+        avformat_close_input(&formatCtx);
+        return;
+    }
+
+    avformat_free_context(formatCtx);
+    formatCtx = nullptr;
+}
+
+}  // namespace
+
+AVDemuxer::AVDemuxer() = default;
 
 AVDemuxer::~AVDemuxer() 
 {
-    avformat_free_context(formatCtx_);
+    closeInput();
 }
 
 void AVDemuxer::unLoad()
 {
-    abortRequest_ = false;
+    abortRequest_.store(false);
+    closeInput();
 }
 
 bool AVDemuxer::getAbortRequest()
 {
-    return abortRequest_;
+    return abortRequest_.load();
 }
 
 bool AVDemuxer::isEof() const
 {
-    return eof_;
+    return eof_.load();
+}
+
+void AVDemuxer::abort(bool abortRequest)
+{
+    abortRequest_.store(abortRequest);
+}
+
+void AVDemuxer::closeInput()
+{
+    availableStream_.clear();
+    currentStream_.clear();
+    freeFormatContext(formatCtx_);
 }
 
 static int decode_interrupt_cb(void* ctx)
@@ -35,11 +123,17 @@ static int decode_interrupt_cb(void* ctx)
 
 int AVDemuxer::doLoad(std::string url)
 {
+    closeInput();
+
+    formatCtx_ = avformat_alloc_context();
     if (!formatCtx_)
     {
-        formatCtx_ = avformat_alloc_context();
+        qWarning() << "avformat_alloc_context failed";
+        return AVERROR(ENOMEM);
     }
-    eof_ = false;
+
+    abortRequest_.store(false);
+    eof_.store(false);
 
     //设置回调，只要ffmpeg进入和可能需要等待的操作，就会反复调用回调。回调返回0，继续等待，返回1，中断操作。
     formatCtx_->flags |= AVFMT_FLAG_GENPTS;
@@ -60,10 +154,11 @@ int AVDemuxer::doLoad(std::string url)
     }
 
     DictionaryStruct dict;
-    // 在avformat_open_input，自定义一些选项配置，可以定制化探测方式，传输方式等功能。
-    for (auto const& iter : inputOptions_)
+
+    if (isNetworkStreamUrl(url))
     {
-        av_dict_set(&dict.dict, iter.first.c_str(), iter.second.c_str(), 0);
+        applyNetworkOptions(url, &dict.dict);
+        qDebug() << "Opening network stream:" << url.c_str();
     }
 
     int ret = avformat_open_input(&formatCtx_, url.c_str(), inputFormat, &dict.dict);
@@ -71,6 +166,7 @@ int AVDemuxer::doLoad(std::string url)
     if (ret < 0)
     {
         qWarning() << "avformat_open_input failed, ret is " << ret;
+        closeInput();
         return ret;
     }
 
@@ -78,6 +174,7 @@ int AVDemuxer::doLoad(std::string url)
     if (ret < 0)
     {
         qWarning() << "avformat_find_stream_info failed, ret is " << ret;
+        closeInput();
         return ret;
     }
     collectStreamInfo(formatCtx_);
@@ -86,6 +183,9 @@ int AVDemuxer::doLoad(std::string url)
 
 void AVDemuxer::collectStreamInfo(AVFormatContext* formatCtx)
 {
+    availableStream_.clear();
+    currentStream_.clear();
+
     for (std::size_t i = 0; i < formatCtx->nb_streams; i++)
     {
         if (!formatCtx->streams[i]->codecpar)
@@ -153,6 +253,11 @@ void AVDemuxer::clearEofFlag()
 
 AVPacketPtr AVDemuxer::readPacket()
 {
+    if (!formatCtx_)
+    {
+        return nullptr;
+    }
+
     AVPacketPtr pkt(av_packet_alloc());
     if (!pkt)
     {
@@ -164,8 +269,14 @@ AVPacketPtr AVDemuxer::readPacket()
     {
         int ret = av_read_frame(formatCtx_, pkt.get());
 
-        if (ret == AVERROR_EOF || avio_feof(formatCtx_->pb)) {
-            eof_ = true;
+        if (ret == AVERROR_EXIT || abortRequest_.load())
+        {
+            qDebug() << "av_read_frame interrupted";
+            return nullptr;
+        }
+
+        if (ret == AVERROR_EOF || (formatCtx_->pb && avio_feof(formatCtx_->pb))) {
+            eof_.store(true);
             qDebug() << "eof set as true";
             return nullptr;
         }

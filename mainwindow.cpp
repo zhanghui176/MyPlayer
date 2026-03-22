@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <QDateTime>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QSignalBlocker>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -33,11 +35,36 @@ void MainWindow::on_pushButton_clicked()
 
 void MainWindow::on_pushButton_2_clicked()
 {
-    QString filename = QFileDialog::getOpenFileName(this, "Open Video", "", "Video Files (*.mp4 *.avi *.mov)");
-    if(filename.isEmpty()) return;
-    player_.setUrl(filename.toStdString());
+    QString source = QInputDialog::getText(
+        this,
+        "Open Media",
+        "输入本地文件路径，或 RTSP/RTMP 地址：\n留空后打开文件选择器");
+
+    source = source.trimmed();
+    if (source.isEmpty())
+    {
+        source = QFileDialog::getOpenFileName(
+            this,
+            "Open Video",
+            "",
+            "Media Files (*.mp4 *.avi *.mov *.mkv *.flv *.ts *.m3u8)");
+    }
+
+    if (source.isEmpty())
+    {
+        return;
+    }
+
+    player_.setUrl(source.toStdString());
     player_.doload();
     duration_ = player_.getDurationSec();
+
+    if (ui->progressSlider)
+    {
+        QSignalBlocker blocker(ui->progressSlider);
+        ui->progressSlider->setValue(0);
+        ui->progressSlider->setEnabled(duration_ > 0.0);
+    }
 }
 
 void MainWindow::onProgressUpdate()
@@ -73,13 +100,19 @@ void MainWindow::onProgressUpdate()
 
 void MainWindow::on_progressSlider_sliderPressed()
 {
+    if (!ui->progressSlider || !ui->progressSlider->isEnabled())
+    {
+        return;
+    }
+
     sliderDragging_ = true;
 }
 
 void MainWindow::on_progressSlider_sliderReleased()
 {
-    if (!ui->progressSlider)
+    if (!ui->progressSlider || !ui->progressSlider->isEnabled() || duration_ <= 0.0)
     {
+        sliderDragging_ = false;
         return;
     }
 
