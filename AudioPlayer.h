@@ -6,6 +6,7 @@
 #include <QAudioFormat>
 #include <QMediaDevices>
 #include <QAudioSink>
+#include <QThread>
 #include <mutex>
 #include "CodecWrapper.h"
 
@@ -31,22 +32,30 @@ signals:
     void AudioFrameReady(AVFrame* frame);
 
 private:
+    void initOnAudioThread();
+    void cleanupOnAudioThread();
+    bool playAudioOnAudioThread(AVFrame* frame);
+    double getAudioTimeOnAudioThread();
+    bool isAudioClockValidOnAudioThread();
+    void resetForSeekOnAudioThread();
     double getBufferedSecUnsafe();
 
 private:
     std::shared_ptr<CodecWrapper> audioCodecWrapper_;
-    AVCodecContext* audioCodecContext_;
-    AVStream* audioStream_;
-    QIODevice* audioDevice_;
-    QAudioSink* audioSink_;
+    AVCodecContext* audioCodecContext_ = nullptr;
+    AVStream* audioStream_ = nullptr;
+    QIODevice* audioDevice_ = nullptr;
+    QAudioSink* audioSink_ = nullptr;
     SwrContext *swr_ctx_ = NULL;
     QAudioFormat format_;
+    QThread audioThread_;
+    QObject* audioThreadContext_ = nullptr;
     std::mutex audioDeviceMtx_;
     std::mutex timeStampMutex_;
     std::mutex audioClockMutex_;
     double audioClockBasePtsSce_ = 0.0;
     bool audioClockValid = false;
-    double audioTimeStamp_;
+    double audioTimeStamp_ = 0.0;
     int bytesPerSecond_ = 0;
     bool quit_;
 

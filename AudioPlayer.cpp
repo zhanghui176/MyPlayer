@@ -1,13 +1,39 @@
 #include "AudioPlayer.h"
 #include <QDebug>
+#include <QMetaObject>
 #include <QThread>
+
+namespace {
+
+template <typename Func>
+void invokeOnAudioThread(QObject* context, Qt::ConnectionType connectionType, Func&& func)
+{
+    if (!context)
+    {
+        return;
+    }
+
+    if (QThread::currentThread() == context->thread())
+    {
+        func();
+        return;
+    }
+
+    QMetaObject::invokeMethod(context, std::forward<Func>(func), connectionType);
+}
+
+} // namespace
 
 AudioPlayer::AudioPlayer(std::shared_ptr<CodecWrapper> codecWrapper)
     : audioCodecWrapper_(codecWrapper)
     , quit_(false)
 {
-    audioStream_ = audioCodecWrapper_->getStream();
-    audioCodecContext_ = codecWrapper->getAvctx();
+    audioStream_ = audioCodecWrapper_ ? audioCodecWrapper_->getStream() : nullptr;
+    audioCodecContext_ = audioCodecWrapper_ ? audioCodecWrapper_->getAvctx() : nullptr;
+    audioThread_.setObjectName("MyPlayerAudioThread");
+    audioThreadContext_ = new QObject();
+    audioThreadContext_->moveToThread(&audioThread_);
+    audioThread_.start();
     qDebug() << "AudioPlay create";
     init();
 }
@@ -16,24 +42,52 @@ AudioPlayer::AudioPlayer(std::shared_ptr<CodecWrapper> codecWrapper)
 AudioPlayer::~AudioPlayer()
 {
     quit_ = true;
-    if (audioSink_) {
-        audioSink_->stop();
-        delete audioSink_;
-        audioSink_ = nullptr;
+
+    if (audioThreadContext_ && audioThread_.isRunning())
+    {
+        invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this]() {
+            cleanupOnAudioThread();
+        });
+        audioThread_.quit();
+        audioThread_.wait();
     }
-    if (swr_ctx_) {
-        swr_free(&swr_ctx_);
-        swr_ctx_ = nullptr;
+    else
+    {
+        cleanupOnAudioThread();
     }
+
+    delete audioThreadContext_;
+    audioThreadContext_ = nullptr;
     qDebug() << "AudioPlayer destructed.";
 }
 
 void AudioPlayer::init()
 {
+    if (!audioThreadContext_)
+    {
+        initOnAudioThread();
+        return;
+    }
+
+    invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this]() {
+        initOnAudioThread();
+    });
+}
+
+void AudioPlayer::initOnAudioThread()
+{
+    cleanupOnAudioThread();
+
     {
         std::lock_guard<std::mutex> locker(audioClockMutex_);
         audioClockBasePtsSce_ = 0.0;
         audioClockValid = false;
+    }
+
+    if (!audioCodecContext_)
+    {
+        qDebug() << "audio codec context is null";
+        return;
     }
     // 创建音频重采样器
     AVChannelLayout out_ch_layout;
@@ -87,6 +141,33 @@ void AudioPlayer::init()
     }
     qDebug() << "audio initialize finished.";
 }
+void AudioPlayer::cleanupOnAudioThread()
+{
+    {
+        std::lock_guard<std::mutex> locker(audioClockMutex_);
+        audioClockBasePtsSce_ = 0.0;
+        audioClockValid = false;
+    }
+
+    {
+        std::lock_guard<std::mutex> audioLk(audioDeviceMtx_);
+        audioDevice_ = nullptr;
+        if (audioSink_)
+        {
+            audioSink_->stop();
+            delete audioSink_;
+            audioSink_ = nullptr;
+        }
+    }
+
+    if (swr_ctx_)
+    {
+        swr_free(&swr_ctx_);
+        swr_ctx_ = nullptr;
+    }
+
+    bytesPerSecond_ = 0;
+}
 
 double AudioPlayer::getBufferedSecUnsafe()
 {
@@ -108,6 +189,20 @@ double AudioPlayer::getBufferedSecUnsafe()
 
 double AudioPlayer::getAudioTime()
 {
+    if (!audioThreadContext_)
+    {
+        return getAudioTimeOnAudioThread();
+    }
+
+    double audioTime = 0.0;
+    invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this, &audioTime]() {
+        audioTime = getAudioTimeOnAudioThread();
+    });
+    return audioTime;
+}
+
+double AudioPlayer::getAudioTimeOnAudioThread()
+{
     std::lock_guard<std::mutex> locker(audioClockMutex_);
     if (!audioClockValid || !audioSink_)
     {
@@ -120,6 +215,19 @@ double AudioPlayer::getAudioTime()
 }
 
 void AudioPlayer::resetForSeek()
+{
+    if (!audioThreadContext_)
+    {
+        resetForSeekOnAudioThread();
+        return;
+    }
+
+    invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this]() {
+        resetForSeekOnAudioThread();
+    });
+}
+
+void AudioPlayer::resetForSeekOnAudioThread()
 {
     {
         std::lock_guard<std::mutex> locker(audioClockMutex_);
@@ -147,10 +255,38 @@ void AudioPlayer::resetForSeek()
 
 bool AudioPlayer::isAudioClockValid()
 {
+    if (!audioThreadContext_)
+    {
+        return isAudioClockValidOnAudioThread();
+    }
+
+    bool valid = false;
+    invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this, &valid]() {
+        valid = isAudioClockValidOnAudioThread();
+    });
+    return valid;
+}
+
+bool AudioPlayer::isAudioClockValidOnAudioThread()
+{
     std::lock_guard<std::mutex> locker(audioClockMutex_);
     return audioClockValid && audioSink_;
 }
 bool AudioPlayer::playAudio(AVFrame* frame)
+{
+    if (!audioThreadContext_)
+    {
+        return playAudioOnAudioThread(frame);
+    }
+
+    bool wroteToDevice = false;
+    invokeOnAudioThread(audioThreadContext_, Qt::BlockingQueuedConnection, [this, frame, &wroteToDevice]() {
+        wroteToDevice = playAudioOnAudioThread(frame);
+    });
+    return wroteToDevice;
+}
+
+bool AudioPlayer::playAudioOnAudioThread(AVFrame* frame)
 {
     if (!frame || !audioSink_ || !audioDevice_ || !swr_ctx_)
     {
